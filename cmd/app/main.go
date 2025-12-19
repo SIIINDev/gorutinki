@@ -5,6 +5,7 @@ import (
 	"gorutin/internal/client"
 	"gorutin/internal/domain"
 	"gorutin/internal/logic"
+	"gorutin/internal/ui"
 	"log"
 	"os"
 	"strings"
@@ -52,7 +53,7 @@ func main() {
 	bot := logic.NewBot()
 
 	// Начальный интервал опроса (медленный, когда игры нет)
-	ticker := time.NewTicker(2000 * time.Millisecond)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -87,6 +88,9 @@ func main() {
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
 
 		playerCmd := bot.CalculateTurn(state)
+
+		// Визуализация
+		ui.Draw(state, bot.GetGrid())
 
 		if playerCmd != nil && len(playerCmd.Bombers) > 0 {
 			if err := api.SendCommands(*playerCmd); err != nil {

@@ -185,6 +185,10 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 }
 
 // BFS поиск пути
+func (b *Bot) GetGrid() [][]int {
+	return b.Grid
+}
+
 func (b *Bot) bfs(start domain.Vec2d, isTarget func(domain.Vec2d) bool) []domain.Vec2d {
 	queue := []domain.Vec2d{start}
 	visited := make(map[domain.Vec2d]domain.Vec2d) // came_from
