@@ -205,7 +205,21 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 		return &cmd
 	}
 
-	// 3. Если делать нечего - не двигаемся.
+	// 3. Если делать нечего - пытаемся разойтись по секторам карты.
+	sector := b.unitSector(u.ID)
+	target := b.exploreTargetForSector(sector)
+	if target != nil {
+		explorePath := b.findExplorePath(myPos, *target)
+		if len(explorePath) > 1 {
+			if len(explorePath)-1 > MaxPathLen {
+				return nil
+			}
+			return &domain.UnitCommand{
+				ID:   u.ID,
+				Path: explorePath[1:],
+			}
+		}
+	}
 	return nil
 }
 
@@ -622,4 +636,89 @@ func (b *Bot) isUnsafeDueToBombs(p domain.Vec2d, arrivalSec float64, ownBombPos 
 		}
 	}
 	return false
+}
+
+func (b *Bot) unitSector(id string) int {
+	if id == "" {
+		return 0
+	}
+	sum := 0
+	for i := 0; i < len(id); i++ {
+		sum = (sum*31 + int(id[i])) % 8
+	}
+	return sum
+}
+
+func (b *Bot) exploreTargetForSector(sector int) *domain.Vec2d {
+	if b.State == nil {
+		return nil
+	}
+	w := b.State.MapSize.X()
+	h := b.State.MapSize.Y()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	xMid := w / 2
+	yMid := h / 2
+	xQ1 := w / 4
+	yQ1 := h / 4
+	xQ3 := (w * 3) / 4
+	yQ3 := (h * 3) / 4
+	xEdge := w / 6
+	yEdge := h / 6
+	switch sector % 8 {
+	case 0: // NW
+		return &domain.Vec2d{xQ1, yQ1}
+	case 1: // NE
+		return &domain.Vec2d{xQ3, yQ1}
+	case 2: // SW
+		return &domain.Vec2d{xQ1, yQ3}
+	case 3: // SE
+		return &domain.Vec2d{xQ3, yQ3}
+	case 4: // N
+		return &domain.Vec2d{xMid, yEdge}
+	case 5: // S
+		return &domain.Vec2d{xMid, h - 1 - yEdge}
+	case 6: // W
+		return &domain.Vec2d{xEdge, yMid}
+	case 7: // E
+		return &domain.Vec2d{w - 1 - xEdge, yMid}
+	default:
+		return &domain.Vec2d{xMid, yMid}
+	}
+}
+
+func (b *Bot) findExplorePath(start, target domain.Vec2d) []domain.Vec2d {
+	queue := []domain.Vec2d{start}
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	visited[start] = domain.Vec2d{-1, -1}
+
+	best := start
+	bestDist := absIntBot(start.X()-target.X()) + absIntBot(start.Y()-target.Y())
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		dist := absIntBot(current.X()-target.X()) + absIntBot(current.Y()-target.Y())
+		if dist < bestDist {
+			bestDist = dist
+			best = current
+			if bestDist == 0 {
+				break
+			}
+		}
+
+		for _, next := range b.neighbors(current) {
+			if !b.isWalkable(next) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return b.reconstructPath(best, visited)
 }

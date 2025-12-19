@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"gorutin/internal/client"
 	"gorutin/internal/domain"
 	"gorutin/internal/logic"
@@ -55,6 +56,7 @@ func main() {
 	defer ticker.Stop()
 	
 	lastBoosterLog := time.Time{}
+	unitStats := &unitTracker{}
 
 	for range ticker.C {
 		// 1. Пытаемся получить состояние
@@ -101,8 +103,16 @@ func main() {
 		}
 
 		// 3. Логика игры
+		unitStats.update(state)
 		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
+		log.Printf("[ENEMIES] %s", formatEnemies(state.Enemies))
+		log.Printf("[MOBS] %s", formatMobs(state.Mobs))
+		for _, u := range state.MyUnits {
+			steps := unitStats.steps[u.ID]
+			log.Printf("[UNIT] id=%s alive=%t pos=%d,%d bombs=%d safe=%d steps=%d",
+				u.ID, u.Alive, u.Pos.X(), u.Pos.Y(), u.BombCount, u.SafeTime, steps)
+		}
 
 		// Бустеры (пока закомментировано, так как логика выбора еще не реализована полностью)
 		/*
@@ -186,4 +196,73 @@ func checkRoundsSchedule(api *client.DatsClient, ticker *time.Ticker) {
 		log.Println("No active game and no future rounds found. Waiting...")
 		ticker.Reset(10 * time.Second)
 	}
+}
+
+type unitTracker struct {
+	round   string
+	lastPos map[string]domain.Vec2d
+	steps   map[string]int
+}
+
+func (t *unitTracker) update(state *domain.GameState) {
+	if state == nil {
+		return
+	}
+	if t.round != state.Round {
+		t.round = state.Round
+		t.lastPos = make(map[string]domain.Vec2d, len(state.MyUnits))
+		t.steps = make(map[string]int, len(state.MyUnits))
+		for _, u := range state.MyUnits {
+			t.lastPos[u.ID] = u.Pos
+			t.steps[u.ID] = 0
+		}
+		return
+	}
+	if t.lastPos == nil {
+		t.lastPos = make(map[string]domain.Vec2d, len(state.MyUnits))
+	}
+	if t.steps == nil {
+		t.steps = make(map[string]int, len(state.MyUnits))
+	}
+	for _, u := range state.MyUnits {
+		if prev, ok := t.lastPos[u.ID]; ok {
+			t.steps[u.ID] += absInt(u.Pos.X()-prev.X()) + absInt(u.Pos.Y()-prev.Y())
+		}
+		t.lastPos[u.ID] = u.Pos
+	}
+}
+
+func formatEnemies(enemies []domain.EnemyUnit) string {
+	if len(enemies) == 0 {
+		return "none"
+	}
+	var b strings.Builder
+	for i, e := range enemies {
+		if i > 0 {
+			b.WriteString(" | ")
+		}
+		fmt.Fprintf(&b, "id=%s pos=%d,%d safe=%d", e.ID, e.Pos.X(), e.Pos.Y(), e.SafeTime)
+	}
+	return b.String()
+}
+
+func formatMobs(mobs []domain.Mob) string {
+	if len(mobs) == 0 {
+		return "none"
+	}
+	var b strings.Builder
+	for i, m := range mobs {
+		if i > 0 {
+			b.WriteString(" | ")
+		}
+		fmt.Fprintf(&b, "id=%s type=%s pos=%d,%d safe=%d", m.ID, m.Type, m.Pos.X(), m.Pos.Y(), m.SafeTime)
+	}
+	return b.String()
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
