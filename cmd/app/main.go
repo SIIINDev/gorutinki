@@ -17,7 +17,7 @@ import (
 func loadEnv() {
 	data, err := os.ReadFile(".env")
 	if err != nil {
-		return // Файла нет, не страшно, надеемся на системные переменные
+		return // Файла нет, не страшно
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -30,7 +30,6 @@ func loadEnv() {
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			// Убираем кавычки, если есть
 			value = strings.Trim(value, `"'`)
 			os.Setenv(key, value)
 		}
@@ -38,13 +37,12 @@ func loadEnv() {
 }
 
 func main() {
-	loadEnv() // Загружаем переменные из файла
+	loadEnv()
 
 	token := os.Getenv("TOKEN")
 	if token == "" {
 		log.Println("CRITICAL: TOKEN env var is not set!")
-		log.Println("Run: $env:TOKEN='your_token'")
-		// Не выходим, вдруг пользователь хочет просто проверить, что бот запускается
+		log.Println("Run: $env:TOKEN='your_token' or create .env file")
 	}
 	serverURL := "https://games-test.datsteam.dev"
 
@@ -53,13 +51,13 @@ func main() {
 	api := client.NewClient(serverURL, token)
 	bot := logic.NewBot()
 
-	// Начальный интервал опроса (медленный, когда игры нет)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	lastBoosterCheck := time.Time{}
+	
+	// lastBoosterCheck := time.Time{}
 
 	for range ticker.C {
-		// 1. Пытаемся получить состояние (это самый надежный способ узнать, идет ли игра)
+		// 1. Пытаемся получить состояние
 		state, err := api.GetGameState()
 		
 		if err != nil {
@@ -67,13 +65,13 @@ func main() {
 			if errors.As(err, &serverErr) {
 				// Код 23: Нет активной игры
 				if serverErr.ErrCode == 23 {
-					log.Println("Waiting for round start... (Next round at 19:00 MSK / 16:00 UTC)")
-					ticker.Reset(5000 * time.Millisecond) // Ждем 5 сек
+					// Если игры нет, проверим расписание, чтобы знать, сколько ждать
+					checkRoundsSchedule(api, ticker)
 					continue
 				}
 				// Код 1: Нет токена
 				if serverErr.ErrCode == 1 {
-					log.Fatal("ERROR: Invalid or missing TOKEN. Please check your environment variable.")
+					log.Fatal("ERROR: Invalid or missing TOKEN. Please check your .env or environment variable.")
 				}
 			}
 			
@@ -82,29 +80,13 @@ func main() {
 			continue
 		}
 
-		if time.Since(lastBoosterCheck) > 5*time.Second {
-			lastBoosterCheck = time.Now()
-			boosters, err := api.GetAvailableBoosters()
-			if err != nil {
-				log.Printf("Error getting boosters: %v", err)
-			} else {
-				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
-					if err := api.ActivateBooster(boosterID); err != nil {
-						log.Printf("Error activating booster: %v", err)
-					} else {
-						log.Printf("Activated booster id=%d", boosterID)
-					}
-				}
-			}
-		}
-
-		// Если ошибок нет, значит игра идет!
-		// Ускоряем опрос
+		// Если ошибок нет, игра идет!
 		ticker.Reset(400 * time.Millisecond)
 
 		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
 
+		// Бустеры (пока закомментировано, так как логика выбора еще не реализована полностью)
 		/*
 		if time.Since(lastBoosterCheck) > 5*time.Second {
 			lastBoosterCheck = time.Now()
@@ -112,28 +94,78 @@ func main() {
 			if err != nil {
 				log.Printf("Error getting boosters: %v", err)
 			} else {
-				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
-					if err := api.ActivateBooster(boosterID); err != nil {
-						log.Printf("Error activating booster: %v", err)
-					} else {
-						log.Printf("Activated booster id=%d", boosterID)
-					}
-				}
+				// TODO: Реализовать функцию ChooseBooster в logic
 			}
 		}
 		*/
 
 		playerCmd := bot.CalculateTurn(state)
 
-		// Визуализация
+		// Визуализация (раскомментируйте, когда захотите видеть карту)
 		// ui.Draw(state, bot.GetGrid())
 
 		if playerCmd != nil && len(playerCmd.Bombers) > 0 {
 			if err := api.SendCommands(*playerCmd); err != nil {
 				log.Printf("Error sending commands: %v", err)
-			} else {
-				// log.Printf("Sent commands for %d units", len(playerCmd.Bombers))
 			}
 		}
+	}
+}
+
+func checkRoundsSchedule(api *client.DatsClient, ticker *time.Ticker) {
+	rounds, err := api.GetRounds()
+	if err != nil {
+		log.Printf("No active game. Waiting... (Error getting rounds: %v)", err)
+		ticker.Reset(5 * time.Second)
+		return
+	}
+
+	var activeRound *domain.RoundResponse
+	var nextRound *domain.RoundResponse
+	now := time.Now().UTC()
+
+	for i := range rounds.Rounds {
+		r := &rounds.Rounds[i]
+		
+		// Парсим время начала (формат RFC3339)
+		startAt, _ := time.Parse(time.RFC3339, r.StartAt)
+		// endAt нам пока не нужен для логики
+
+		if r.Status == "active" {
+			activeRound = r
+			break
+		}
+		
+		// Ищем ближайший будущий раунд
+		if startAt.After(now) {
+			if nextRound == nil {
+				nextRound = r
+			} else {
+				// Если этот раунд раньше, чем уже найденный nextRound
+				nextStart, _ := time.Parse(time.RFC3339, nextRound.StartAt)
+				if startAt.Before(nextStart) {
+					nextRound = r
+				}
+			}
+		}
+	}
+
+	if activeRound != nil {
+		log.Printf("Round '%s' is ACTIVE! Connecting...", activeRound.Name)
+		ticker.Reset(100 * time.Millisecond) // Сразу пробуем подключиться
+	} else if nextRound != nil {
+		startAt, _ := time.Parse(time.RFC3339, nextRound.StartAt)
+		wait := time.Until(startAt)
+		log.Printf("No active round. Next round '%s' starts in %v (%s)", nextRound.Name, wait.Round(time.Second), startAt.Format("15:04:05 UTC"))
+		
+		// Если ждать долго, замедляем опрос
+		if wait > 10*time.Second {
+			ticker.Reset(5 * time.Second)
+		} else {
+			ticker.Reset(1 * time.Second)
+		}
+	} else {
+		log.Println("No active game and no future rounds found. Waiting...")
+		ticker.Reset(10 * time.Second)
 	}
 }
