@@ -56,17 +56,18 @@ func main() {
 	vizServer.Start(":8080")
 	log.Println("Visualization started on http://localhost:8080")
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	
 	lastBoosterLog := time.Time{}
+	var currentBoosters *domain.BoosterState
 
 	for range ticker.C {
 		// 1. Пытаемся получить состояние
 		state, err := api.GetGameState()
 		
 		if err != nil {
-			// ... (обработка ошибок остается прежней)
+			// ...
 			var serverErr *domain.ServerError
 			if errors.As(err, &serverErr) {
 				if serverErr.ErrCode == 23 {
@@ -86,6 +87,7 @@ func main() {
 			lastBoosterLog = time.Now()
 			boosters, err := api.GetAvailableBoosters()
 			if err == nil {
+				currentBoosters = &boosters.State
 				s := boosters.State
 				log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d/%d | Armor: %d | View: %d", 
 					s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
@@ -96,26 +98,10 @@ func main() {
 		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
 
-		// Бустеры (пока закомментировано, так как логика выбора еще не реализована полностью)
-		/*
-		if time.Since(lastBoosterCheck) > 5*time.Second {
-			lastBoosterCheck = time.Now()
-			boosters, err := api.GetAvailableBoosters()
-			if err != nil {
-				log.Printf("Error getting boosters: %v", err)
-			} else {
-				// TODO: Реализовать функцию ChooseBooster в logic
-			}
-		}
-		*/
-
 		playerCmd := bot.CalculateTurn(state)
 
 		// Обновляем данные для браузера
-		vizServer.Update(state, bot.GetGrid())
-
-		// Визуализация (раскомментируйте, когда захотите видеть карту)
-		// ui.Draw(state, bot.GetGrid())
+		vizServer.Update(state, bot.GetGrid(), currentBoosters)
 
 		if playerCmd != nil && len(playerCmd.Bombers) > 0 {
 			if err := api.SendCommands(*playerCmd); err != nil {
@@ -124,6 +110,7 @@ func main() {
 		}
 	}
 }
+
 
 func checkRoundsSchedule(api *client.DatsClient, ticker *time.Ticker) {
 	rounds, err := api.GetRounds()
