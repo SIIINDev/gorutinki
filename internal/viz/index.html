@@ -4,15 +4,24 @@
     <meta charset="UTF-8">
     <title>Gorutin Viz</title>
     <style>
-        body { background: #222; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; overflow: hidden; height: 100vh; margin: 0; }
-        #top-bar { display: flex; align-items: center; gap: 20px; padding: 10px; background: #111; width: 100%; box-sizing: border-box; z-index: 10;}
-        canvas { background: #333; cursor: grab; }
+        body { background: #222; color: #fff; font-family: monospace; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+        #top-bar { display: flex; align-items: center; gap: 20px; padding: 10px; background: #111; width: 100%; box-sizing: border-box; z-index: 10; border-bottom: 2px solid #444;}
+        #main-container { display: flex; flex: 1; overflow: hidden; }
+        #viz-container { flex: 1; position: relative; background: #333; overflow: hidden; }
+        canvas { cursor: grab; display: block; }
         canvas:active { cursor: grabbing; }
+        #sidebar { width: 250px; background: #1a1a1a; border-left: 2px solid #444; padding: 15px; overflow-y: auto; }
         #stats { font-size: 16px; font-weight: bold; }
-        .legend { display: flex; gap: 10px; font-size: 12px; }
+        .legend { display: flex; gap: 10px; font-size: 12px; flex-wrap: wrap; }
         .item { display: flex; align-items: center; gap: 4px; }
         .color-box { width: 12px; height: 12px; border: 1px solid #fff; }
-        .controls { font-size: 12px; color: #aaa; margin-left: auto; }
+        .controls { font-size: 11px; color: #888; margin-left: auto; text-align: right; }
+        
+        .skill-group { margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .skill-group h3 { margin: 0 0 10px 0; font-size: 14px; color: #00ff00; text-transform: uppercase; }
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 13px; }
+        .stat-val { color: #fff; font-weight: bold; }
+        .stat-label { color: #aaa; }
     </style>
 </head>
 <body>
@@ -23,14 +32,42 @@
             <div class="item"><div class="color-box" style="background:#cd853f"></div> Box</div>
             <div class="item"><div class="color-box" style="background:#00ff00"></div> Me</div>
             <div class="item"><div class="color-box" style="background:#ff0000"></div> Enemy</div>
-            <div class="item"><div class="color-box" style="background:rgba(255, 0, 0, 0.3)"></div> Danger</div>
         </div>
         <div class="controls">
-            Scroll to Zoom | Drag to Pan | Double Click to Reset
+            Scroll to Zoom | Drag to Pan<br>Double Click to Reset
         </div>
     </div>
     
-    <canvas id="gameCanvas"></canvas>
+    <div id="main-container">
+        <div id="viz-container">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+        <div id="sidebar">
+            <div class="skill-group">
+                <h3>Economy</h3>
+                <div class="stat-row"><span class="stat-label">Points:</span> <span class="stat-val" id="val-points">0</span></div>
+            </div>
+            <div class="skill-group">
+                <h3>Movement</h3>
+                <div class="stat-row"><span class="stat-label">Speed:</span> <span class="stat-val" id="val-speed">0</span></div>
+                <div class="stat-row"><span class="stat-label">View:</span> <span class="stat-val" id="val-view">0</span></div>
+            </div>
+            <div class="skill-group">
+                <h3>Combat</h3>
+                <div class="stat-row"><span class="stat-label">Units:</span> <span class="stat-val" id="val-bombers">0</span></div>
+                <div class="stat-row"><span class="stat-label">Bombs:</span> <span class="stat-val" id="val-bombs">0</span></div>
+                <div class="stat-row"><span class="stat-label">Range:</span> <span class="stat-val" id="val-range">0</span></div>
+                <div class="stat-row"><span class="stat-label">Delay:</span> <span class="stat-val" id="val-delay">0ms</span></div>
+            </div>
+            <div class="skill-group">
+                <h3>Passive</h3>
+                <div class="stat-row"><span class="stat-label">Armor:</span> <span class="stat-val" id="val-armor">0</span></div>
+                <div class="stat-row"><span class="stat-label">Pass Walls:</span> <span class="stat-val" id="val-p-walls">No</span></div>
+                <div class="stat-row"><span class="stat-label">Pass Boxes:</span> <span class="stat-val" id="val-p-boxes">No</span></div>
+                <div class="stat-row"><span class="stat-label">Pass Bombs:</span> <span class="stat-val" id="val-p-bombs">No</span></div>
+            </div>
+        </div>
+    </div>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -46,16 +83,17 @@
         let lastMouseX = 0;
         let lastMouseY = 0;
 
-        // Resize canvas to full screen minus header
         function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight - document.getElementById('top-bar').offsetHeight;
+            const container = document.getElementById('viz-container');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
             if (lastData) draw();
         }
         window.addEventListener('resize', resize);
-        resize();
+        setTimeout(resize, 100);
 
         // --- Interaction Handlers ---
+        // (Scroll, Drag, Reset logic stays the same)
 
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -136,7 +174,6 @@
                 const response = await fetch('/api/state');
                 const data = await response.json();
                 
-                // If it's the first data packet, center the view
                 const isFirstData = !lastData;
                 lastData = data;
                 
@@ -144,10 +181,26 @@
                     centerMap();
                 }
 
+                updateSidebar(data.boosters);
                 draw();
             } catch (e) {
                 console.error(e);
             }
+        }
+
+        function updateSidebar(b) {
+            if (!b) return;
+            document.getElementById('val-points').innerText = b.points;
+            document.getElementById('val-speed').innerText = b.speed;
+            document.getElementById('val-view').innerText = b.view;
+            document.getElementById('val-bombers').innerText = b.bombers;
+            document.getElementById('val-bombs').innerText = b.bombs;
+            document.getElementById('val-range').innerText = b.bomb_range;
+            document.getElementById('val-delay').innerText = b.bomb_delay + 'ms';
+            document.getElementById('val-armor').innerText = b.armor;
+            document.getElementById('val-p-walls').innerText = b.can_pass_walls ? 'Yes' : 'No';
+            document.getElementById('val-p-boxes').innerText = b.can_pass_obstacles ? 'Yes' : 'No';
+            document.getElementById('val-p-bombs').innerText = b.can_pass_bombs ? 'Yes' : 'No';
         }
 
         function draw() {
@@ -224,35 +277,79 @@
                 }
             }
 
-            // 3. Units
-            if (s.enemies) s.enemies.forEach(u => drawCircle(u.pos[0], u.pos[1], 'red'));
-            if (s.mobs) s.mobs.forEach(m => drawCircle(m.pos[0], m.pos[1], 'purple'));
-            
-            if (s.bombers) {
-                s.bombers.forEach(u => {
-                    if (u.alive) {
-                        // Highlight My Unit
-                        ctx.fillStyle = '#00ff00';
-                        ctx.beginPath();
-                        ctx.arc(u.pos[0] * cellSize + cellSize/2, u.pos[1] * cellSize + cellSize/2, cellSize/2.2, 0, Math.PI * 2);
-                        ctx.fill();
-                        
-                        // Vision radius circle (thin line)
-                        ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
-                        ctx.lineWidth = 2;
-                        ctx.beginPath();
-                        const r = 5; // Default vision
-                        ctx.arc(u.pos[0] * cellSize + cellSize/2, u.pos[1] * cellSize + cellSize/2, r * cellSize, 0, Math.PI * 2);
-                        ctx.stroke();
+            // 3. Units (Grouped by Position)
+            const occupants = {}; // Key: "x,y", Value: Array of {type, data}
 
-                        // ID
-                        ctx.fillStyle = 'black';
-                        ctx.font = `bold ${cellSize/3}px monospace`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText(u.id.substr(-2), u.pos[0]*cellSize + cellSize/2, u.pos[1]*cellSize + cellSize/2);
-                    }
-                });
+            const addOccupant = (x, y, type, data) => {
+                const key = `${x},${y}`;
+                if (!occupants[key]) occupants[key] = [];
+                occupants[key].push({type, data});
+            };
+
+            if (s.enemies) s.enemies.forEach(u => addOccupant(u.pos[0], u.pos[1], 'enemy', u));
+            if (s.mobs) s.mobs.forEach(m => addOccupant(m.pos[0], m.pos[1], 'mob', m));
+            if (s.bombers) s.bombers.forEach(u => {
+                if (u.alive) addOccupant(u.pos[0], u.pos[1], 'me', u);
+            });
+
+            // Draw grouped units
+            for (const [key, list] of Object.entries(occupants)) {
+                const [x, y] = key.split(',').map(Number);
+                const count = list.length;
+
+                // Priority: Me > Enemy > Mob (to decide which color to show as base)
+                let primary = list.find(o => o.type === 'me') 
+                           || list.find(o => o.type === 'enemy') 
+                           || list[0];
+
+                // Draw Primary Unit
+                if (primary.type === 'me') {
+                    const u = primary.data;
+                    ctx.fillStyle = '#00ff00';
+                    ctx.beginPath();
+                    ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, cellSize/2.2, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Vision ring
+                    ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, 5 * cellSize, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // ID
+                    ctx.fillStyle = 'black';
+                    ctx.font = `bold ${cellSize/3}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(u.id.substr(-2), x*cellSize + cellSize/2, y*cellSize + cellSize/2);
+
+                } else if (primary.type === 'enemy') {
+                    drawCircle(x, y, 'red');
+                } else {
+                    drawCircle(x, y, 'purple');
+                }
+
+                // Draw Count Badge if > 1
+                if (count > 1) {
+                    const badgeSize = cellSize / 2.5;
+                    const bx = x * cellSize + cellSize - badgeSize/1.5;
+                    const by = y * cellSize + badgeSize/1.5;
+
+                    ctx.fillStyle = 'white';
+                    ctx.beginPath();
+                    ctx.arc(bx, by, badgeSize/1.8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+
+                    ctx.fillStyle = 'black';
+                    ctx.font = `bold ${badgeSize}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(count, bx, by);
+                }
             }
         }
 

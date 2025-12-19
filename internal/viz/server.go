@@ -12,9 +12,10 @@ import (
 var indexHTML []byte
 
 type Server struct {
-	mu    sync.RWMutex
-	state *domain.GameState
-	grid  [][]int
+	mu       sync.RWMutex
+	state    *domain.GameState
+	grid     [][]int
+	boosters *domain.BoosterState
 }
 
 func NewServer() *Server {
@@ -27,11 +28,12 @@ func (s *Server) Start(addr string) {
 	go http.ListenAndServe(addr, nil)
 }
 
-func (s *Server) Update(state *domain.GameState, grid [][]int) {
+func (s *Server) Update(state *domain.GameState, grid [][]int, boosters *domain.BoosterState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = state
 	s.grid = grid
+	s.boosters = boosters
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -44,11 +46,13 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	response := struct {
-		State *domain.GameState `json:"state"`
-		Grid  [][]int           `json:"grid"`
+		State    *domain.GameState    `json:"state"`
+		Grid     [][]int              `json:"grid"`
+		Boosters *domain.BoosterState `json:"boosters"`
 	}{
-		State: s.state,
-		Grid:  s.grid,
+		State:    s.state,
+		Grid:     s.grid,
+		Boosters: s.boosters,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

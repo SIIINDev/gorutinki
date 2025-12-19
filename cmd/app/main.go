@@ -57,11 +57,13 @@ func main() {
 	vizServer.Start(":8080")
 	log.Println("Visualization started on http://localhost:8080")
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	
 	const boosterCheckInterval = 2 * time.Second
 	lastBoosterCheck := time.Time{}
+	lastBoosterLog := time.Time{}
+	var currentBoosters *domain.BoosterState
 	unitStats := &unitTracker{}
 	skillPoints := &skillPointTracker{}
 
@@ -70,7 +72,7 @@ func main() {
 		state, err := api.GetGameState()
 		
 		if err != nil {
-			// ... (обработка ошибок остается прежней)
+			// ...
 			var serverErr *domain.ServerError
 			if errors.As(err, &serverErr) {
 				if serverErr.ErrCode == 23 {
@@ -86,11 +88,24 @@ func main() {
 		}
 
 		skillPoints.updateRound(state.Round, time.Now())
+		if time.Since(lastBoosterLog) > 10*time.Second {
+			lastBoosterLog = time.Now()
+			boosters, err := api.GetAvailableBoosters()
+			if err == nil {
+				currentBoosters = &boosters.State
+				s := boosters.State
+				log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d/%d | Armor: %d | View: %d",
+					s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
+			}
+		}
 		remainingPoints := skillPoints.remainingPoints(time.Now())
 		if remainingPoints > 0 && time.Since(lastBoosterCheck) > boosterCheckInterval {
 			lastBoosterCheck = time.Now()
-			if spent, ok := tryUpgradeUnit(api, bot, state, remainingPoints); ok {
+			if spent, ok, boosters := tryUpgradeUnit(api, bot, state, remainingPoints); ok {
 				skillPoints.spend(spent)
+				if boosters != nil {
+					currentBoosters = boosters
+				}
 			}
 		}
 
@@ -106,26 +121,10 @@ func main() {
 				u.ID, u.Alive, u.Pos.X(), u.Pos.Y(), u.BombCount, u.SafeTime, steps)
 		}
 
-		// Бустеры (пока закомментировано, так как логика выбора еще не реализована полностью)
-		/*
-		if time.Since(lastBoosterCheck) > 5*time.Second {
-			lastBoosterCheck = time.Now()
-			boosters, err := api.GetAvailableBoosters()
-			if err != nil {
-				log.Printf("Error getting boosters: %v", err)
-			} else {
-				// TODO: Реализовать функцию ChooseBooster в logic
-			}
-		}
-		*/
-
 		playerCmd := bot.CalculateTurn(state)
 
 		// Обновляем данные для браузера
-		vizServer.Update(state, bot.GetGrid())
-
-		// Визуализация (раскомментируйте, когда захотите видеть карту)
-		// ui.Draw(state, bot.GetGrid())
+		vizServer.Update(state, bot.GetGrid(), currentBoosters)
 
 		if playerCmd != nil && len(playerCmd.Bombers) > 0 {
 			if err := api.SendCommands(*playerCmd); err != nil {
@@ -135,34 +134,34 @@ func main() {
 	}
 }
 
-func tryUpgradeUnit(api *client.DatsClient, bot *logic.Bot, state *domain.GameState, maxSpend int) (int, bool) {
+func tryUpgradeUnit(api *client.DatsClient, bot *logic.Bot, state *domain.GameState, maxSpend int) (int, bool, *domain.BoosterState) {
 	boosters, err := api.GetAvailableBoosters()
 	if err != nil {
 		log.Printf("Error getting boosters: %v", err)
-		return 0, false
+		return 0, false, nil
 	}
 	if boosters == nil {
-		return 0, false
+		return 0, false, nil
 	}
 	s := boosters.State
 	log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d | Bombers: %d | Armor: %d | View: %d",
 		s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
 	bot.UpdateBoosterState(s)
 	if len(boosters.Available) == 0 {
-		return 0, false
+		return 0, false, &boosters.State
 	}
 	filtered, mapIdx := filterBoostersByCost(boosters.Available, s.Points, maxSpend)
 	if len(filtered) == 0 {
-		return 0, false
+		return 0, false, &boosters.State
 	}
 	boosterID, ok := logic.ChooseBooster(filtered, s, state)
 	if !ok {
-		return 0, false
+		return 0, false, &boosters.State
 	}
 	originIdx := mapIdx[boosterID]
 	if err := api.ActivateBooster(originIdx); err != nil {
 		log.Printf("Error activating booster: %v", err)
-		return 0, false
+		return 0, false, &boosters.State
 	}
 	if originIdx >= 0 && originIdx < len(boosters.Available) {
 		ui.RecordBoosterPurchase(boosters.Available[originIdx].Type)
@@ -172,7 +171,7 @@ func tryUpgradeUnit(api *client.DatsClient, bot *logic.Bot, state *domain.GameSt
 		cost = boosters.Available[originIdx].Cost
 	}
 	log.Printf("Activated booster id=%d", originIdx)
-	return cost, true
+	return cost, true, &boosters.State
 }
 
 func checkRoundsSchedule(api *client.DatsClient, ticker *time.Ticker) {
