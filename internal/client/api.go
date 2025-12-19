@@ -25,14 +25,12 @@ func NewClient(url, token string) *DatsClient {
 	}
 }
 
-// GetGameState получает текущее состояние мира
 func (c *DatsClient) GetGameState() (*domain.GameState, error) {
-	// TODO: Проверьте точный эндпоинт в Swagger
-	req, err := http.NewRequest("GET", c.BaseURL+"/play/zombidef/units", nil)
+	req, err := http.NewRequest("GET", c.BaseURL+"/api/arena", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("X-Auth-Token", c.Token)
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
@@ -52,25 +50,17 @@ func (c *DatsClient) GetGameState() (*domain.GameState, error) {
 	return &state, nil
 }
 
-// SendCommands отправляет команды для юнитов
-func (c *DatsClient) SendCommands(cmds []domain.Command) error {
-	if len(cmds) == 0 {
-		return nil
-	}
-
-	data, err := json.Marshal(struct {
-		Commands []domain.Command `json:"commands"`
-	}{Commands: cmds})
+func (c *DatsClient) SendCommands(cmd domain.PlayerCommand) error {
+	data, err := json.Marshal(cmd)
 	if err != nil {
 		return err
 	}
 
-	// TODO: Проверьте точный эндпоинт отправки команд
-	req, err := http.NewRequest("POST", c.BaseURL+"/play/zombidef/command", bytes.NewBuffer(data))
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/move", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("X-Auth-Token", c.Token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.Client.Do(req)
@@ -78,6 +68,12 @@ func (c *DatsClient) SendCommands(cmds []domain.Command) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		// Читаем ошибку, если есть
+		// var apiErr ...
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
 	
 	return nil
 }

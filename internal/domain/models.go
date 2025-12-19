@@ -1,47 +1,65 @@
 package domain
 
-// Vec2d - координаты на карте
-type Vec2d struct {
-	X int `json:"x"`
-	Y int `json:"y"`
-}
+import "encoding/json"
 
-// GameState - полное состояние игры, приходящее от сервера
+// Vec2d - координаты [x, y]
+type Vec2d [2]int
+
+func (v Vec2d) X() int { return v[0] }
+func (v Vec2d) Y() int { return v[1] }
+
+// GameState - состояние мира (/api/arena)
 type GameState struct {
-	MapSize Vec2d  `json:"mapSize"`
-	MyUnits []Unit `json:"units"` // Предположим, что сервер присылает наши юниты
-	Enemies []Unit `json:"enemies"`
-	Walls   []Vec2d `json:"walls"`
-	Bombs   []Bomb  `json:"bombs"`
-	Mobs    []Mob   `json:"mobs"`
-	Tick    int     `json:"tick"`
+	Arena    Arena         `json:"arena"`
+	MyUnits  []Unit        `json:"bombers"`
+	Enemies  []EnemyUnit   `json:"enemies"`
+	Mobs     []Mob         `json:"mobs"`
+	MapSize  Vec2d         `json:"map_size"`
+	Round    string        `json:"round"`
+	RawScore int           `json:"raw_score"`
+	Tick     int           `json:"-"` // Внутренний счетчик тиков, если нужно
 }
 
-// Unit - наш персонаж
+type Arena struct {
+	Bombs     []Bomb    `json:"bombs"`
+	Obstacles []Vec2d   `json:"obstacles"`
+	Walls     []Vec2d   `json:"walls"`
+}
+
 type Unit struct {
-	ID        string `json:"id"`
-	Pos       Vec2d  `json:"pos"`
-	Health    int    `json:"hp"`
-	BombCount int    `json:"bombCount"` // Сколько бомб сейчас в инвентаре
+	ID             string `json:"id"`
+	Pos            Vec2d  `json:"pos"`
+	Alive          bool   `json:"alive"`
+	BombCount      int    `json:"bombs_available"` // bombs_available
+	SafeTime       int    `json:"safe_time"`
 }
 
-// Bomb - установленная бомба
-type Bomb struct {
-	Pos       Vec2d `json:"pos"`
-	Timer     int   `json:"timer"`
-	Radius    int   `json:"radius"`
-	OwnerID   string `json:"ownerId"`
+type EnemyUnit struct {
+	ID       string `json:"id"`
+	Pos      Vec2d  `json:"pos"`
+	SafeTime int    `json:"safe_time"`
 }
 
-// Mob - моб (призрак или патрульный)
 type Mob struct {
-	Pos  Vec2d  `json:"pos"`
-	Type string `json:"type"` // "ghost" или "patrol"
+	ID       string `json:"id"`
+	Pos      Vec2d  `json:"pos"`
+	Type     string `json:"type"` // "ghost", "patrol" (предположительно)
+	SafeTime int    `json:"safe_time"`
 }
 
-// Command - команда отправляемая на сервер
-type Command struct {
-	UnitID string   `json:"unitId"`
-	Move   []Vec2d  `json:"move,omitempty"`  // Путь перемещения
-	Bomb   []Vec2d  `json:"plant,omitempty"` // Координаты установки бомб
+type Bomb struct {
+	Pos    Vec2d   `json:"pos"`
+	Timer  float64 `json:"timer"`
+	Radius int     `json:"range"`
+}
+
+// PlayerCommand - структура запроса в /api/move
+type PlayerCommand struct {
+	Bombers []UnitCommand `json:"bombers"`
+}
+
+type UnitCommand struct {
+	ID    string  `json:"id"`
+	Path  []Vec2d `json:"path,omitempty"`
+	Bombs []Vec2d `json:"bombs,omitempty"`
 }
