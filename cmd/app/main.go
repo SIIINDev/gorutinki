@@ -5,7 +5,8 @@ import (
 	"gorutin/internal/client"
 	"gorutin/internal/domain"
 	"gorutin/internal/logic"
-	"gorutin/internal/ui"
+
+	// "gorutin/internal/ui"
 	"log"
 	"os"
 	"strings"
@@ -81,13 +82,6 @@ func main() {
 			continue
 		}
 
-		// Если ошибок нет, значит игра идет!
-		// Ускоряем опрос
-		ticker.Reset(400 * time.Millisecond)
-
-		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
-			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
-
 		if time.Since(lastBoosterCheck) > 5*time.Second {
 			lastBoosterCheck = time.Now()
 			boosters, err := api.GetAvailableBoosters()
@@ -104,10 +98,35 @@ func main() {
 			}
 		}
 
+		// Если ошибок нет, значит игра идет!
+		// Ускоряем опрос
+		ticker.Reset(400 * time.Millisecond)
+
+		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
+			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
+
+		/*
+		if time.Since(lastBoosterCheck) > 5*time.Second {
+			lastBoosterCheck = time.Now()
+			boosters, err := api.GetAvailableBoosters()
+			if err != nil {
+				log.Printf("Error getting boosters: %v", err)
+			} else {
+				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
+					if err := api.ActivateBooster(boosterID); err != nil {
+						log.Printf("Error activating booster: %v", err)
+					} else {
+						log.Printf("Activated booster id=%d", boosterID)
+					}
+				}
+			}
+		}
+		*/
+
 		playerCmd := bot.CalculateTurn(state)
 
 		// Визуализация
-		ui.Draw(state, bot.GetGrid())
+		// ui.Draw(state, bot.GetGrid())
 
 		if playerCmd != nil && len(playerCmd.Bombers) > 0 {
 			if err := api.SendCommands(*playerCmd); err != nil {

@@ -125,7 +125,7 @@ func (c *DatsClient) GetAvailableBoosters() (*domain.AvailableBoosterResponse, e
 		return nil, err
 	}
 	defer resp.Body.Close()
-
+	
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
