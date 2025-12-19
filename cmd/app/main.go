@@ -5,7 +5,7 @@ import (
 	"gorutin/internal/client"
 	"gorutin/internal/domain"
 	"gorutin/internal/logic"
-
+	"gorutin/internal/viz"
 	// "gorutin/internal/ui"
 	"log"
 	"os"
@@ -51,7 +51,12 @@ func main() {
 	api := client.NewClient(serverURL, token)
 	bot := logic.NewBot()
 
-	ticker := time.NewTicker(600 * time.Millisecond)
+	// Запускаем сервер визуализации
+	vizServer := viz.NewServer()
+	vizServer.Start(":8080")
+	log.Println("Visualization started on http://localhost:8080")
+
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	
 	lastBoosterLog := time.Time{}
@@ -105,6 +110,9 @@ func main() {
 		*/
 
 		playerCmd := bot.CalculateTurn(state)
+
+		// Обновляем данные для браузера
+		vizServer.Update(state, bot.GetGrid())
 
 		// Визуализация (раскомментируйте, когда захотите видеть карту)
 		// ui.Draw(state, bot.GetGrid())

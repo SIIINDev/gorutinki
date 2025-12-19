@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gorutin Viz</title>
+    <style>
+        body { background: #222; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; overflow: hidden; height: 100vh; margin: 0; }
+        #top-bar { display: flex; align-items: center; gap: 20px; padding: 10px; background: #111; width: 100%; box-sizing: border-box; z-index: 10;}
+        canvas { background: #333; cursor: grab; }
+        canvas:active { cursor: grabbing; }
+        #stats { font-size: 16px; font-weight: bold; }
+        .legend { display: flex; gap: 10px; font-size: 12px; }
+        .item { display: flex; align-items: center; gap: 4px; }
+        .color-box { width: 12px; height: 12px; border: 1px solid #fff; }
+        .controls { font-size: 12px; color: #aaa; margin-left: auto; }
+    </style>
+</head>
+<body>
+    <div id="top-bar">
+        <div id="stats">Waiting for bot...</div>
+        <div class="legend">
+            <div class="item"><div class="color-box" style="background:#888"></div> Wall</div>
+            <div class="item"><div class="color-box" style="background:#cd853f"></div> Box</div>
+            <div class="item"><div class="color-box" style="background:#00ff00"></div> Me</div>
+            <div class="item"><div class="color-box" style="background:#ff0000"></div> Enemy</div>
+            <div class="item"><div class="color-box" style="background:rgba(255, 0, 0, 0.3)"></div> Danger</div>
+        </div>
+        <div class="controls">
+            Scroll to Zoom | Drag to Pan | Double Click to Reset
+        </div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const stats = document.getElementById('stats');
+
+        // State
+        let lastData = null;
+        let zoom = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isDragging = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        // Resize canvas to full screen minus header
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight - document.getElementById('top-bar').offsetHeight;
+            if (lastData) draw();
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Interaction Handlers ---
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = 1.1;
+            const direction = e.deltaY < 0 ? 1 : -1;
+            
+            // Zoom towards mouse pointer
+            const mouseX = e.offsetX;
+            const mouseY = e.offsetY;
+
+            // Convert mouse screen pos to world pos (relative to pan)
+            const worldX = (mouseX - panX) / zoom;
+            const worldY = (mouseY - panY) / zoom;
+
+            // Apply zoom
+            if (direction > 0) zoom *= zoomFactor;
+            else zoom /= zoomFactor;
+
+            // Clamp zoom
+            if (zoom < 0.1) zoom = 0.1;
+            if (zoom > 20) zoom = 20;
+
+            // Adjust pan to keep mouse pointing at same world coord
+            panX = mouseX - worldX * zoom;
+            panY = mouseY - worldY * zoom;
+
+            draw();
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = e.clientX - lastMouseX;
+                const dy = e.clientY - lastMouseY;
+                panX += dx;
+                panY += dy;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                draw();
+            }
+        });
+
+        window.addEventListener('mouseup', () => isDragging = false);
+
+        canvas.addEventListener('dblclick', () => {
+            // Reset view
+            zoom = 1.0;
+            centerMap();
+            draw();
+        });
+
+        function centerMap() {
+            if (!lastData || !lastData.state) return;
+            const s = lastData.state;
+            const mapW = s.map_size[0] * 50; // Assume base cell size 50
+            const mapH = s.map_size[1] * 50;
+            
+            // Calculate scale to fit
+            const scaleX = canvas.width / mapW;
+            const scaleY = canvas.height / mapH;
+            const fitScale = Math.min(scaleX, scaleY) * 0.9;
+            
+            zoom = fitScale;
+            panX = (canvas.width - mapW * zoom) / 2;
+            panY = (canvas.height - mapH * zoom) / 2;
+        }
+
+
+        // --- Networking & Rendering ---
+
+        async function fetchState() {
+            try {
+                const response = await fetch('/api/state');
+                const data = await response.json();
+                
+                // If it's the first data packet, center the view
+                const isFirstData = !lastData;
+                lastData = data;
+                
+                if (isFirstData && data.state) {
+                    centerMap();
+                }
+
+                draw();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function draw() {
+            if (!lastData || !lastData.state) return;
+            
+            // Clear screen
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#333";
+            ctx.fillRect(0,0, canvas.width, canvas.height);
+
+            const s = lastData.state;
+            const grid = lastData.grid;
+            
+            stats.innerText = `Round: ${s.round || '?'} | Score: ${s.raw_score}`;
+
+            // --- Apply Transformation ---
+            ctx.translate(panX, panY);
+            ctx.scale(zoom, zoom);
+
+            // Base cell size (internal coordinate system)
+            const cellSize = 50; 
+            const mapW = s.map_size[0];
+            const mapH = s.map_size[1];
+
+            // Draw Map Background
+            ctx.fillStyle = "#2a2a2a";
+            ctx.fillRect(0, 0, mapW * cellSize, mapH * cellSize);
+            ctx.strokeStyle = "#444";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(0, 0, mapW * cellSize, mapH * cellSize);
+
+            // Helpers
+            const drawCell = (x, y, color) => {
+                ctx.fillStyle = color;
+                ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+            };
+
+            const drawCircle = (x, y, color) => {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, cellSize/2.5, 0, Math.PI * 2);
+                ctx.fill();
+            };
+
+            // 1. Static objects
+            if (s.arena) {
+                s.arena.walls.forEach(p => drawCell(p[0], p[1], '#888')); // Wall
+                s.arena.obstacles.forEach(p => drawCell(p[0], p[1], '#cd853f')); // Box
+                
+                s.arena.bombs.forEach(b => {
+                    ctx.fillStyle = 'black';
+                    ctx.beginPath();
+                    ctx.arc(b.pos[0] * cellSize + cellSize/2, b.pos[1] * cellSize + cellSize/2, cellSize/3, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = 'white';
+                    ctx.font = `bold ${cellSize/2}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(Math.ceil(b.timer), b.pos[0]*cellSize + cellSize/2, b.pos[1]*cellSize + cellSize/2);
+                });
+            }
+
+            // 2. Danger Grid
+            if (grid) {
+                for (let x = 0; x < mapW; x++) {
+                    for (let y = 0; y < mapH; y++) {
+                        if (grid[x][y] === 2) { 
+                            ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+                            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+                        }
+                    }
+                }
+            }
+
+            // 3. Units
+            if (s.enemies) s.enemies.forEach(u => drawCircle(u.pos[0], u.pos[1], 'red'));
+            if (s.mobs) s.mobs.forEach(m => drawCircle(m.pos[0], m.pos[1], 'purple'));
+            
+            if (s.bombers) {
+                s.bombers.forEach(u => {
+                    if (u.alive) {
+                        // Highlight My Unit
+                        ctx.fillStyle = '#00ff00';
+                        ctx.beginPath();
+                        ctx.arc(u.pos[0] * cellSize + cellSize/2, u.pos[1] * cellSize + cellSize/2, cellSize/2.2, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        // Vision radius circle (thin line)
+                        ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        const r = 5; // Default vision
+                        ctx.arc(u.pos[0] * cellSize + cellSize/2, u.pos[1] * cellSize + cellSize/2, r * cellSize, 0, Math.PI * 2);
+                        ctx.stroke();
+
+                        // ID
+                        ctx.fillStyle = 'black';
+                        ctx.font = `bold ${cellSize/3}px monospace`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(u.id.substr(-2), u.pos[0]*cellSize + cellSize/2, u.pos[1]*cellSize + cellSize/2);
+                    }
+                });
+            }
+        }
+
+        setInterval(fetchState, 100);
+    </script>
+</body>
+</html>
