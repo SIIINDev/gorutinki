@@ -63,17 +63,17 @@ type AvailableBooster struct {
 }
 
 type BoosterState struct {
+	Points           int  `json:"points"`
 	Armor            int  `json:"armor"`
 	BombDelay        int  `json:"bomb_delay"`
 	BombRange        int  `json:"bomb_range"`
 	Bombers          int  `json:"bombers"`
-	Bombs            int  `json:"bombs"`
+	MaxBombs         int  `json:"bombs"`
+	Speed            int  `json:"speed"`
+	View             int  `json:"view"`
 	CanPassBombs     bool `json:"can_pass_bombs"`
 	CanPassObstacles bool `json:"can_pass_obstacles"`
 	CanPassWalls     bool `json:"can_pass_walls"`
-	Points           int  `json:"points"`
-	Speed            int  `json:"speed"`
-	View             int  `json:"view"`
 }
 
 // PlayerCommand - структура запроса в /api/move

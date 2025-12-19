@@ -51,38 +51,43 @@ func main() {
 	api := client.NewClient(serverURL, token)
 	bot := logic.NewBot()
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(600 * time.Millisecond)
 	defer ticker.Stop()
 	
-	// lastBoosterCheck := time.Time{}
+	lastBoosterLog := time.Time{}
 
 	for range ticker.C {
 		// 1. Пытаемся получить состояние
 		state, err := api.GetGameState()
 		
 		if err != nil {
+			// ... (обработка ошибок остается прежней)
 			var serverErr *domain.ServerError
 			if errors.As(err, &serverErr) {
-				// Код 23: Нет активной игры
 				if serverErr.ErrCode == 23 {
-					// Если игры нет, проверим расписание, чтобы знать, сколько ждать
 					checkRoundsSchedule(api, ticker)
 					continue
 				}
-				// Код 1: Нет токена
 				if serverErr.ErrCode == 1 {
-					log.Fatal("ERROR: Invalid or missing TOKEN. Please check your .env or environment variable.")
+					log.Fatal("ERROR: Invalid or missing TOKEN.")
 				}
 			}
-			
-			// Другая ошибка
 			log.Printf("API Error: %v", err)
 			continue
 		}
 
-		// Если ошибок нет, игра идет!
-		ticker.Reset(400 * time.Millisecond)
+		// 2. Раз в 10 секунд выводим статистику бустов
+		if time.Since(lastBoosterLog) > 10*time.Second {
+			lastBoosterLog = time.Now()
+			boosters, err := api.GetAvailableBoosters()
+			if err == nil {
+				s := boosters.State
+				log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d/%d | Armor: %d | View: %d", 
+					s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
+			}
+		}
 
+		// 3. Логика игры
 		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
 
