@@ -87,6 +87,28 @@ type UnitCommand struct {
 	Bombs []Vec2d `json:"bombs,omitempty"`
 }
 
+type RoundListResponse struct {
+	Rounds []RoundResponse `json:"rounds"`
+	Now    string          `json:"now"`
+}
+
+type RoundResponse struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	StartAt string `json:"startAt"`
+	EndAt   string `json:"endAt"`
+	Duration int   `json:"duration"`
+}
+
+// ServerError - стандартная ошибка от API
+type ServerError struct {
+	ErrCode int    `json:"errCode"`
+	Message string `json:"error"`
+}
+
+func (e *ServerError) Error() string {
+	return e.Message
+}
 // BoosterCommand - request body for /api/booster
 type BoosterCommand struct {
 	Booster int `json:"booster"`
