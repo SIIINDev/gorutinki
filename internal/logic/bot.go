@@ -2,6 +2,7 @@ package logic
 
 import (
 	"gorutin/internal/domain"
+	"sort"
 )
 
 type Bot struct {
@@ -11,6 +12,10 @@ type Bot struct {
 	Speed     int
 	roundID   string
 	roundTick int
+	unitSectors map[string]int
+	unitTargets map[string]domain.Vec2d
+	attackTargets map[string]attackTarget
+	currentSelfID string
 }
 
 const (
@@ -40,10 +45,12 @@ func (b *Bot) CalculateTurn(state *domain.GameState) *domain.PlayerCommand {
 	if b.roundID != state.Round {
 		b.roundID = state.Round
 		b.roundTick = 0
+		b.attackTargets = nil
 	} else {
 		b.roundTick++
 	}
 	b.buildGrid()
+	b.assignUnitTargets()
 
 	var unitCmds []domain.UnitCommand
 
@@ -134,7 +141,15 @@ func (b *Bot) markExplosionZone(bomb domain.Bomb) {
 }
 
 func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
+	b.currentSelfID = u.ID
+	defer func() { b.currentSelfID = "" }()
 	myPos := u.Pos
+	if b.onlyUnitAlive(u.ID) && u.BombCount > 0 {
+		return &domain.UnitCommand{
+			ID:    u.ID,
+			Bombs: []domain.Vec2d{myPos},
+		}
+	}
 
 	// 1. Если мы в опасности - бежим!
 	if b.Grid[myPos.X()][myPos.Y()] == CellDanger {
@@ -190,26 +205,41 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 		}
 		return &cmd
 	}
-	path, bombPos = b.findAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
-	if len(path) > 1 {
-		if len(path)-1 > MaxPathLen {
-			return nil
+	if wantBomb {
+		if cmd := b.followAttackTarget(u, b.BombRange); cmd != nil {
+			return cmd
 		}
-		cmd := domain.UnitCommand{
-			ID:   u.ID,
-			Path: path[1:],
+	} else {
+		path, bombPos = b.findAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
+		if len(path) > 1 {
+			if len(path)-1 > MaxPathLen {
+				return nil
+			}
+			cmd := domain.UnitCommand{
+				ID:   u.ID,
+				Path: path[1:],
+			}
+			if bombPos != nil {
+				cmd.Bombs = []domain.Vec2d{*bombPos}
+			}
+			return &cmd
 		}
-		if bombPos != nil {
-			cmd.Bombs = []domain.Vec2d{*bombPos}
-		}
-		return &cmd
 	}
 
 	// 3. Если делать нечего - пытаемся разойтись по секторам карты.
 	sector := b.unitSector(u.ID)
-	target := b.exploreTargetForSector(sector)
-	if target != nil {
-		explorePath := b.findExplorePath(myPos, *target)
+	if target, ok := b.unitTargets[u.ID]; ok {
+		if b.shouldSeparateFromSharedTarget(u.ID, target) {
+			fallbackPath := b.pickFallbackMove(myPos, sector, u.ID)
+			if len(fallbackPath) > 1 {
+				return &domain.UnitCommand{
+					ID:   u.ID,
+					Path: fallbackPath[1:],
+				}
+			}
+			return nil
+		}
+		explorePath := b.findExplorePath(myPos, target)
 		if len(explorePath) > 1 {
 			if len(explorePath)-1 > MaxPathLen {
 				return nil
@@ -218,6 +248,27 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 				ID:   u.ID,
 				Path: explorePath[1:],
 			}
+		}
+	} else {
+		target := b.exploreTargetForSector(sector)
+		if target != nil {
+			explorePath := b.findExplorePath(myPos, *target)
+			if len(explorePath) > 1 {
+				if len(explorePath)-1 > MaxPathLen {
+					return nil
+				}
+				return &domain.UnitCommand{
+					ID:   u.ID,
+					Path: explorePath[1:],
+				}
+			}
+		}
+	}
+	fallbackPath := b.pickFallbackMove(myPos, sector, u.ID)
+	if len(fallbackPath) > 1 {
+		return &domain.UnitCommand{
+			ID:   u.ID,
+			Path: fallbackPath[1:],
 		}
 	}
 	return nil
@@ -295,40 +346,59 @@ func (b *Bot) isWalkable(p domain.Vec2d) bool {
 	if !b.isValid(p) {
 		return false
 	}
-	return b.Grid[p.X()][p.Y()] == CellEmpty
+	if b.Grid[p.X()][p.Y()] != CellEmpty {
+		return false
+	}
+	if b.isTooCloseToFriendly(p, b.currentSelfID) {
+		return false
+	}
+	return true
 }
 
 func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, selfID string) ([]domain.Vec2d, *domain.Vec2d) {
 	queue := []domain.Vec2d{start}
 	visited := make(map[domain.Vec2d]domain.Vec2d)
 	visited[start] = domain.Vec2d{-1, -1}
+	steps := make(map[domain.Vec2d]int)
+	steps[start] = 0
+
+	bestScore := 0
+	var bestPath []domain.Vec2d
+	var bestBombPos *domain.Vec2d
 
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
-		if b.hasAdjacentObstacle(current) {
-			if wantBomb && current == start {
-				goto expand
-			}
+		currentSteps := steps[current]
+		if currentSteps > MaxPathLen {
+			continue
+		}
 
-			path := b.reconstructPath(current, visited)
-			if !wantBomb {
-				if len(path)-1 <= MaxPathLen {
-					return path, nil
-				}
-			} else {
+		if wantBomb {
+			score := b.countObstaclesInBlast(current, bombRange)
+			if score > 0 {
 				if b.hasFriendlyInBlast(current, bombRange, selfID) {
 					goto expand
 				}
 				escapePath := b.findEscapePath(current, bombRange)
 				if len(escapePath) > 1 {
+					path := b.reconstructPath(current, visited)
 					path = append(path, escapePath[1:]...)
 					if len(path)-1 <= MaxPathLen {
-						bombPos := current
-						return path, &bombPos
+						if score > bestScore || (score == bestScore && (bestPath == nil || len(path) < len(bestPath))) {
+							bestScore = score
+							bestPath = path
+							bombPos := current
+							bestBombPos = &bombPos
+						}
 					}
 				}
+			}
+		} else if b.hasAdjacentObstacle(current) {
+			path := b.reconstructPath(current, visited)
+			if len(path)-1 <= MaxPathLen {
+				return path, nil
 			}
 		}
 
@@ -339,11 +409,15 @@ func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, s
 			}
 			if _, seen := visited[next]; !seen {
 				visited[next] = current
+				steps[next] = currentSteps + 1
 				queue = append(queue, next)
 			}
 		}
 	}
 
+	if bestPath != nil {
+		return bestPath, bestBombPos
+	}
 	return nil, nil
 }
 
@@ -623,6 +697,9 @@ func (b *Bot) isWalkableTimed(p domain.Vec2d, arrivalSec float64, ownBombPos dom
 	if b.Grid[p.X()][p.Y()] == CellWall {
 		return false
 	}
+	if b.isTooCloseToFriendly(p, b.currentSelfID) {
+		return false
+	}
 	return !b.isUnsafeDueToBombs(p, arrivalSec, ownBombPos)
 }
 
@@ -639,6 +716,11 @@ func (b *Bot) isUnsafeDueToBombs(p domain.Vec2d, arrivalSec float64, ownBombPos 
 }
 
 func (b *Bot) unitSector(id string) int {
+	if b.unitSectors != nil {
+		if sector, ok := b.unitSectors[id]; ok {
+			return sector
+		}
+	}
 	if id == "" {
 		return 0
 	}
@@ -647,6 +729,160 @@ func (b *Bot) unitSector(id string) int {
 		sum = (sum*31 + int(id[i])) % 8
 	}
 	return sum
+}
+
+func (b *Bot) countObstaclesInBlast(bombPos domain.Vec2d, bombRange int) int {
+	count := 0
+	dirs := []domain.Vec2d{{0, 1}, {0, -1}, {1, 0}, {-1, 0}}
+
+	for _, d := range dirs {
+		for i := 1; i <= bombRange; i++ {
+			pos := domain.Vec2d{bombPos.X() + d.X()*i, bombPos.Y() + d.Y()*i}
+			if !b.isValid(pos) {
+				break
+			}
+			if b.isObstacle(pos) {
+				count++
+				break
+			}
+			if b.isBlocked(pos) {
+				break
+			}
+		}
+	}
+
+	return count
+}
+
+type attackTarget struct {
+	pos   domain.Vec2d
+	score int
+}
+
+func (b *Bot) followAttackTarget(u domain.Unit, bombRange int) *domain.UnitCommand {
+	if b.attackTargets == nil {
+		b.attackTargets = make(map[string]attackTarget)
+	}
+	current, ok := b.attackTargets[u.ID]
+	if ok {
+		if b.countObstaclesInBlast(current.pos, bombRange) == 0 {
+			ok = false
+		}
+	}
+	if !ok {
+		if pos, score, ok2 := b.findBestBombTarget(u.Pos, bombRange, u.ID); ok2 {
+			current = attackTarget{pos: pos, score: score}
+			b.attackTargets[u.ID] = current
+		} else {
+			return nil
+		}
+	}
+	if b.shouldSeparateFromSharedTarget(u.ID, current.pos) {
+		sector := b.unitSector(u.ID)
+		fallbackPath := b.pickFallbackMove(u.Pos, sector, u.ID)
+		if len(fallbackPath) > 1 {
+			return &domain.UnitCommand{
+				ID:   u.ID,
+				Path: fallbackPath[1:],
+			}
+		}
+		return nil
+	}
+
+	path := b.findPathToTarget(u.Pos, current.pos)
+	if len(path) > 1 {
+		if len(path)-1 > MaxPathLen {
+			return nil
+		}
+		return &domain.UnitCommand{
+			ID:   u.ID,
+			Path: path[1:],
+		}
+	}
+
+	if u.Pos != current.pos {
+		return nil
+	}
+	if b.hasFriendlyInBlast(u.Pos, bombRange, u.ID) {
+		return nil
+	}
+	escapePath := b.findEscapePath(u.Pos, bombRange)
+	if len(escapePath) <= 1 {
+		return nil
+	}
+
+	if pos, score, ok2 := b.findBestBombTarget(u.Pos, bombRange, u.ID); ok2 && pos != current.pos {
+		b.attackTargets[u.ID] = attackTarget{pos: pos, score: score}
+	} else {
+		delete(b.attackTargets, u.ID)
+	}
+
+	return &domain.UnitCommand{
+		ID:    u.ID,
+		Path:  escapePath[1:],
+		Bombs: []domain.Vec2d{u.Pos},
+	}
+}
+
+func (b *Bot) findBestBombTarget(start domain.Vec2d, bombRange int, selfID string) (domain.Vec2d, int, bool) {
+	queue := []domain.Vec2d{start}
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	steps := make(map[domain.Vec2d]int)
+	visited[start] = domain.Vec2d{-1, -1}
+	steps[start] = 0
+
+	bestScore := 0
+	bestSteps := 0
+	bestPos := domain.Vec2d{}
+	found := false
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		currentSteps := steps[current]
+		if currentSteps > MaxPathLen {
+			continue
+		}
+		score := b.countObstaclesInBlast(current, bombRange)
+		if score > 0 {
+			if b.hasFriendlyInBlast(current, bombRange, selfID) {
+				goto expand
+			}
+			escapePath := b.findEscapePath(current, bombRange)
+			if len(escapePath) > 1 {
+				totalSteps := currentSteps + (len(escapePath) - 1)
+				if totalSteps <= MaxPathLen {
+					if score > bestScore || (score == bestScore && (!found || totalSteps < bestSteps)) {
+						bestScore = score
+						bestSteps = totalSteps
+						bestPos = current
+						found = true
+					}
+				}
+			}
+		}
+
+	expand:
+		for _, next := range b.neighbors(current) {
+			if !b.isWalkable(next) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				steps[next] = currentSteps + 1
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return bestPos, bestScore, found
+}
+
+func (b *Bot) findPathToTarget(start, target domain.Vec2d) []domain.Vec2d {
+	return b.bfs(start, func(p domain.Vec2d) bool {
+		return p == target
+	})
 }
 
 func (b *Bot) exploreTargetForSector(sector int) *domain.Vec2d {
@@ -721,4 +957,212 @@ func (b *Bot) findExplorePath(start, target domain.Vec2d) []domain.Vec2d {
 	}
 
 	return b.reconstructPath(best, visited)
+}
+
+func (b *Bot) pickFallbackMove(start domain.Vec2d, sector int, selfID string) []domain.Vec2d {
+	neighbors := b.neighbors(start)
+	if len(neighbors) == 0 {
+		return nil
+	}
+	best := domain.Vec2d{}
+	bestSet := false
+	bestScore := -1
+	shift := (sector + b.roundTick) % len(neighbors)
+	for i := 0; i < len(neighbors); i++ {
+		n := neighbors[(i+shift)%len(neighbors)]
+		if !b.isWalkable(n) {
+			continue
+		}
+		score := b.separationScore(n, selfID)
+		if score > bestScore {
+			bestScore = score
+			best = n
+			bestSet = true
+		}
+	}
+	if bestSet {
+		return []domain.Vec2d{start, best}
+	}
+	return nil
+}
+
+func (b *Bot) onlyUnitAlive(selfID string) bool {
+	alive := 0
+	for _, u := range b.State.MyUnits {
+		if u.Alive {
+			alive++
+			if alive > 1 {
+				return false
+			}
+		}
+	}
+	return alive == 1
+}
+
+func (b *Bot) separationScore(pos domain.Vec2d, selfID string) int {
+	minFriendDist := 999999
+	for _, u := range b.State.MyUnits {
+		if !u.Alive || u.ID == selfID {
+			continue
+		}
+		d := manhattanBot(pos, u.Pos)
+		if d < minFriendDist {
+			minFriendDist = d
+		}
+	}
+	if minFriendDist == 999999 {
+		minFriendDist = 0
+	}
+	obstacleDist := b.nearestObstacleDistance(pos)
+	if obstacleDist < 0 {
+		obstacleDist = 0
+	}
+	return minFriendDist*1000 - obstacleDist
+}
+
+func (b *Bot) nearestObstacleDistance(pos domain.Vec2d) int {
+	if b.State == nil || len(b.State.Arena.Obstacles) == 0 {
+		return -1
+	}
+	best := 999999
+	for _, o := range b.State.Arena.Obstacles {
+		d := manhattanBot(pos, o)
+		if d < best {
+			best = d
+		}
+	}
+	return best
+}
+
+func (b *Bot) assignUnitTargets() {
+	if b.State == nil {
+		return
+	}
+	type unitInfo struct {
+		id  string
+		pos domain.Vec2d
+	}
+	units := make([]unitInfo, 0, len(b.State.MyUnits))
+	for _, u := range b.State.MyUnits {
+		if u.Alive {
+			units = append(units, unitInfo{id: u.ID, pos: u.Pos})
+		}
+	}
+	if len(units) == 0 {
+		b.unitSectors = nil
+		b.unitTargets = nil
+		return
+	}
+	sort.Slice(units, func(i, j int) bool {
+		return units[i].id < units[j].id
+	})
+
+	candidates := b.candidateTargets()
+	sectors := make(map[string]int, len(units))
+	targets := make(map[string]domain.Vec2d, len(units))
+	if len(candidates) == 0 {
+		b.unitSectors = nil
+		b.unitTargets = nil
+		return
+	}
+
+	for i, u := range units {
+		bestIdx := 0
+		bestScore := -1
+		for cIdx, c := range candidates {
+			minDist := 999999
+			for _, t := range targets {
+				d := manhattanBot(c, t)
+				if d < minDist {
+					minDist = d
+				}
+			}
+			if len(targets) == 0 {
+				minDist = 999999
+			}
+			distFromUnit := manhattanBot(u.pos, c)
+			score := minDist*10000 + distFromUnit
+			if score > bestScore {
+				bestScore = score
+				bestIdx = cIdx
+			}
+		}
+		sectors[u.id] = bestIdx % 8
+		targets[u.id] = candidates[bestIdx]
+		if i+1 >= len(candidates) {
+			continue
+		}
+	}
+	b.unitSectors = sectors
+	b.unitTargets = targets
+}
+
+func (b *Bot) candidateTargets() []domain.Vec2d {
+	if b.State == nil {
+		return nil
+	}
+	w := b.State.MapSize.X()
+	h := b.State.MapSize.Y()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	xMid := w / 2
+	yMid := h / 2
+	xQ1 := w / 4
+	yQ1 := h / 4
+	xQ3 := (w * 3) / 4
+	yQ3 := (h * 3) / 4
+	xEdge := w / 6
+	yEdge := h / 6
+	candidates := []domain.Vec2d{
+		{xQ1, yQ1},                 // NW
+		{xQ3, yQ1},                 // NE
+		{xQ1, yQ3},                 // SW
+		{xQ3, yQ3},                 // SE
+		{xMid, yEdge},              // N
+		{xMid, h - 1 - yEdge},      // S
+		{xEdge, yMid},              // W
+		{w - 1 - xEdge, yMid},      // E
+	}
+	filtered := make([]domain.Vec2d, 0, len(candidates))
+	for _, c := range candidates {
+		if b.isValid(c) {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
+func manhattanBot(a, b domain.Vec2d) int {
+	return absIntBot(a.X()-b.X()) + absIntBot(a.Y()-b.Y())
+}
+
+func (b *Bot) isTooCloseToFriendly(pos domain.Vec2d, selfID string) bool {
+	if b.State == nil {
+		return false
+	}
+	for _, u := range b.State.MyUnits {
+		if !u.Alive || u.ID == selfID {
+			continue
+		}
+		if manhattanBot(pos, u.Pos) < 3 {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) shouldSeparateFromSharedTarget(selfID string, target domain.Vec2d) bool {
+	for _, u := range b.State.MyUnits {
+		if !u.Alive || u.ID == selfID {
+			continue
+		}
+		if t, ok := b.attackTargets[u.ID]; ok && t.pos == target {
+			return true
+		}
+		if ut, ok := b.unitTargets[u.ID]; ok && ut == target {
+			return true
+		}
+	}
+	return false
 }

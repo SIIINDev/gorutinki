@@ -60,8 +60,10 @@ func main() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	
-	lastBoosterLog := time.Time{}
+	const boosterCheckInterval = 2 * time.Second
+	lastBoosterCheck := time.Time{}
 	unitStats := &unitTracker{}
+	skillPoints := &skillPointTracker{}
 
 	for range ticker.C {
 		// 1. Пытаемся получить состояние
@@ -83,27 +85,12 @@ func main() {
 			continue
 		}
 
-		// 2. Раз в 10 секунд выводим статистику бустов
-		if time.Since(lastBoosterLog) > 10*time.Second {
-			lastBoosterLog = time.Now()
-			boosters, err := api.GetAvailableBoosters()
-			if err != nil {
-				log.Printf("Error getting boosters: %v", err)
-			} else {
-				s := boosters.State
-				log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d | Bombers: %d | Armor: %d | View: %d",
-					s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
-				bot.UpdateBoosterState(s)
-				if boosterID, ok := logic.ChooseBooster(boosters.Available, s, state); ok {
-					if err := api.ActivateBooster(boosterID); err != nil {
-						log.Printf("Error activating booster: %v", err)
-					} else {
-						if boosterID >= 0 && boosterID < len(boosters.Available) {
-							ui.RecordBoosterPurchase(boosters.Available[boosterID].Type)
-						}
-						log.Printf("Activated booster id=%d", boosterID)
-					}
-				}
+		skillPoints.updateRound(state.Round, time.Now())
+		remainingPoints := skillPoints.remainingPoints(time.Now())
+		if remainingPoints > 0 && time.Since(lastBoosterCheck) > boosterCheckInterval {
+			lastBoosterCheck = time.Now()
+			if spent, ok := tryUpgradeUnit(api, bot, state, remainingPoints); ok {
+				skillPoints.spend(spent)
 			}
 		}
 
@@ -146,6 +133,46 @@ func main() {
 			}
 		}
 	}
+}
+
+func tryUpgradeUnit(api *client.DatsClient, bot *logic.Bot, state *domain.GameState, maxSpend int) (int, bool) {
+	boosters, err := api.GetAvailableBoosters()
+	if err != nil {
+		log.Printf("Error getting boosters: %v", err)
+		return 0, false
+	}
+	if boosters == nil {
+		return 0, false
+	}
+	s := boosters.State
+	log.Printf("[BOOSTS] Points: %d | Speed: %d | Range: %d | Bombs: %d | Bombers: %d | Armor: %d | View: %d",
+		s.Points, s.Speed, s.BombRange, s.MaxBombs, s.Bombers, s.Armor, s.View)
+	bot.UpdateBoosterState(s)
+	if len(boosters.Available) == 0 {
+		return 0, false
+	}
+	filtered, mapIdx := filterBoostersByCost(boosters.Available, s.Points, maxSpend)
+	if len(filtered) == 0 {
+		return 0, false
+	}
+	boosterID, ok := logic.ChooseBooster(filtered, s, state)
+	if !ok {
+		return 0, false
+	}
+	originIdx := mapIdx[boosterID]
+	if err := api.ActivateBooster(originIdx); err != nil {
+		log.Printf("Error activating booster: %v", err)
+		return 0, false
+	}
+	if originIdx >= 0 && originIdx < len(boosters.Available) {
+		ui.RecordBoosterPurchase(boosters.Available[originIdx].Type)
+	}
+	cost := 1
+	if originIdx >= 0 && originIdx < len(boosters.Available) {
+		cost = boosters.Available[originIdx].Cost
+	}
+	log.Printf("Activated booster id=%d", originIdx)
+	return cost, true
 }
 
 func checkRoundsSchedule(api *client.DatsClient, ticker *time.Ticker) {
@@ -273,4 +300,68 @@ func absInt(v int) int {
 		return -v
 	}
 	return v
+}
+
+type skillPointTracker struct {
+	round string
+	start time.Time
+	spent int
+}
+
+func (t *skillPointTracker) updateRound(round string, now time.Time) {
+	if round == "" {
+		return
+	}
+	if t.round != round {
+		t.round = round
+		t.start = now
+		t.spent = 0
+	}
+}
+
+func (t *skillPointTracker) earnedPoints(now time.Time) int {
+	if t.start.IsZero() {
+		return 0
+	}
+	elapsed := now.Sub(t.start)
+	points := int(elapsed / (90 * time.Second))
+	if points > 10 {
+		points = 10
+	}
+	if points < 0 {
+		points = 0
+	}
+	return points
+}
+
+func (t *skillPointTracker) remainingPoints(now time.Time) int {
+	earned := t.earnedPoints(now)
+	remaining := earned - t.spent
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (t *skillPointTracker) spend(points int) {
+	if points <= 0 {
+		return
+	}
+	t.spent += points
+	if t.spent > 10 {
+		t.spent = 10
+	}
+}
+
+func filterBoostersByCost(available []domain.AvailableBooster, points int, maxSpend int) ([]domain.AvailableBooster, []int) {
+	filtered := make([]domain.AvailableBooster, 0, len(available))
+	mapIdx := make([]int, 0, len(available))
+	for i, b := range available {
+		if b.Cost > points || b.Cost > maxSpend {
+			continue
+		}
+		filtered = append(filtered, b)
+		mapIdx = append(mapIdx, i)
+	}
+	return filtered, mapIdx
 }

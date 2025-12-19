@@ -6,24 +6,24 @@ import (
 )
 
 var boosterPriority = [][]string{
-	{"bombs"},
-	{"bomb_range", "range"},
 	{"bomb_delay", "fuse"},
+	{"bomb_range", "range"},
+	{"bombs"},
 	{"speed"},
-	{"bombers", "soft_skills"},
-	{"acrobatics", "can_pass_bombs", "can_pass_obstacles", "can_pass_walls"},
-	{"view", "vision"},
 	{"armor"},
+	{"view", "vision"},
+	{"acrobatics", "can_pass_bombs", "can_pass_obstacles", "can_pass_walls"},
+	{"bombers", "soft_skills"},
 }
 
 var boosterPriorityDefense = [][]string{
+	{"bomb_delay", "fuse"},
+	{"bomb_range", "range"},
+	{"bombs"},
 	{"speed"},
 	{"armor"},
-	{"acrobatics", "can_pass_bombs", "can_pass_obstacles", "can_pass_walls"},
 	{"view", "vision"},
-	{"bombs"},
-	{"bomb_range", "range"},
-	{"bomb_delay", "fuse"},
+	{"acrobatics", "can_pass_bombs", "can_pass_obstacles", "can_pass_walls"},
 	{"bombers", "soft_skills"},
 }
 
