@@ -2,7 +2,6 @@ package logic
 
 import (
 	"gorutin/internal/domain"
-	//"math"
 )
 
 type Bot struct {
@@ -14,6 +13,7 @@ const (
 	CellEmpty  = 0
 	CellWall   = -1 // Непроходимо
 	CellDanger = 2  // Опасно (зона взрыва)
+	MaxPathLen = 30
 )
 
 func NewBot() *Bot {
@@ -121,6 +121,9 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 			return b.Grid[p.X()][p.Y()] == CellEmpty
 		})
 		if len(safePath) > 1 {
+			if len(safePath)-1 > MaxPathLen {
+				safePath = safePath[:MaxPathLen+1]
+			}
 			return &domain.UnitCommand{
 				ID:   u.ID,
 				Path: safePath[1:], // [0] это текущая позиция
@@ -128,59 +131,25 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 		}
 	}
 
-	// 2. Если есть бомба - ищем ящик, чтобы взорвать
-	if u.BombCount > 0 {
-		targetPath := b.bfs(myPos, func(p domain.Vec2d) bool {
-			// Ищем соседнюю с ящиком клетку
-			for _, d := range []domain.Vec2d{{0, 1}, {0, -1}, {1, 0}, {-1, 0}} {
-				neighbor := domain.Vec2d{p.X() + d.X(), p.Y() + d.Y()}
-				if b.isObstacle(neighbor) {
-					return true
-				}
-			}
-			return false
-		})
-
-		if len(targetPath) > 1 {
-			// Если мы пришли на позицию для атаки
-			if len(targetPath) == 1 { // Мы уже на месте (в теории bfs вернет [start] если start подходит)
-				// Ставим бомбу
-				return &domain.UnitCommand{
-					ID:    u.ID,
-					Bombs: []domain.Vec2d{myPos},
-				}
-			}
-			
-			// Если следующий шаг приведет к цели, и мы хотим поставить бомбу
-			// Но пока просто идем к цели
-			// Ограничиваем путь 1-2 шагами, так как ситуация меняется
-			limit := 2
-			if len(targetPath) < limit {
-				limit = len(targetPath)
-			}
-			
-			// Если мы дошли до позиции, откуда можно взорвать ящик
-			// Проверим, является ли текущая позиция хорошей для установки?
-			// Пока простая логика: дошли до конца найденного пути - ставим
-			if len(targetPath) <= 2 {
-				// Почти пришли. 
-				// Можно поставить бомбу прямо здесь, если это безопасно (есть путь отхода)
-				// TODO: Проверка пути отхода
-				return &domain.UnitCommand{
-					ID:    u.ID,
-					Bombs: []domain.Vec2d{myPos}, // Пытаемся поставить
-					// Path: []domain.Vec2d{targetPath[1]}, // И отойти?
-				}
-			}
-
-			return &domain.UnitCommand{
-				ID:   u.ID,
-				Path: targetPath[1:limit],
-			}
+	// 2. Пытаемся добраться до клетки рядом с препятствием.
+	// Если есть бомбы - ставим и сразу отходим.
+	wantBomb := u.BombCount > 0
+	path, bombPos := b.findAttackPlan(myPos, wantBomb)
+	if len(path) > 1 {
+		if len(path)-1 > MaxPathLen {
+			return nil
 		}
+		cmd := domain.UnitCommand{
+			ID:   u.ID,
+			Path: path[1:],
+		}
+		if bombPos != nil {
+			cmd.Bombs = []domain.Vec2d{*bombPos}
+		}
+		return &cmd
 	}
 
-	// 3. Просто рандомное движение, если делать нечего (или безопасное место)
+	// 3. Если делать нечего - не двигаемся.
 	return nil
 }
 
@@ -222,17 +191,9 @@ func (b *Bot) bfs(start domain.Vec2d, isTarget func(domain.Vec2d) bool) []domain
 		}
 
 		for _, next := range neighbors {
-			if !b.isValid(next) {
+			if !b.isWalkable(next) {
 				continue
 			}
-			// Проверяем проходимость: Стены нельзя, Опасность - нежелательно (но если спасаемся, то можно фильтровать)
-			// Сейчас считаем, что ходить можно только по пустым клеткам (Grid != Wall)
-			// Если мы в опасности, то мы ИЩЕМ безопасную (target func проверит Grid==Empty)
-			// Но промежуточные клетки могут быть Dangerous? Лучше избегать.
-			if b.Grid[next.X()][next.Y()] == CellWall {
-				continue
-			}
-			// В бомбы ходить нельзя
 			
 			if _, seen := visited[next]; !seen {
 				visited[next] = current
@@ -254,4 +215,94 @@ func (b *Bot) isObstacle(p domain.Vec2d) bool {
 		}
 	}
 	return false
+}
+
+func (b *Bot) isWalkable(p domain.Vec2d) bool {
+	if !b.isValid(p) {
+		return false
+	}
+	return b.Grid[p.X()][p.Y()] == CellEmpty
+}
+
+func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool) ([]domain.Vec2d, *domain.Vec2d) {
+	queue := []domain.Vec2d{start}
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	visited[start] = domain.Vec2d{-1, -1}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if b.hasAdjacentObstacle(current) {
+			if wantBomb && current == start {
+				goto expand
+			}
+
+			path := b.reconstructPath(current, visited)
+			if !wantBomb {
+				if len(path)-1 <= MaxPathLen {
+					return path, nil
+				}
+			} else {
+				escape, ok := b.findEscapeNeighbor(current)
+				if ok {
+					path = append(path, escape)
+					if len(path)-1 <= MaxPathLen {
+						bombPos := current
+						return path, &bombPos
+					}
+				}
+			}
+		}
+
+	expand:
+		for _, next := range b.neighbors(current) {
+			if !b.isWalkable(next) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func (b *Bot) hasAdjacentObstacle(p domain.Vec2d) bool {
+	for _, n := range b.neighbors(p) {
+		if b.isObstacle(n) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) findEscapeNeighbor(p domain.Vec2d) (domain.Vec2d, bool) {
+	for _, n := range b.neighbors(p) {
+		if b.isWalkable(n) {
+			return n, true
+		}
+	}
+	return domain.Vec2d{}, false
+}
+
+func (b *Bot) neighbors(p domain.Vec2d) []domain.Vec2d {
+	return []domain.Vec2d{
+		{p.X() + 1, p.Y()},
+		{p.X() - 1, p.Y()},
+		{p.X(), p.Y() + 1},
+		{p.X(), p.Y() - 1},
+	}
+}
+
+func (b *Bot) reconstructPath(target domain.Vec2d, visited map[domain.Vec2d]domain.Vec2d) []domain.Vec2d {
+	path := []domain.Vec2d{}
+	curr := target
+	for curr != (domain.Vec2d{-1, -1}) {
+		path = append([]domain.Vec2d{curr}, path...)
+		curr = visited[curr]
+	}
+	return path
 }

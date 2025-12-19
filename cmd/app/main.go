@@ -55,6 +55,7 @@ func main() {
 	// Начальный интервал опроса (медленный, когда игры нет)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	lastBoosterCheck := time.Time{}
 
 	for range ticker.C {
 		// 1. Пытаемся получить состояние (это самый надежный способ узнать, идет ли игра)
@@ -86,6 +87,22 @@ func main() {
 
 		log.Printf("[%s] Units: %d | Enemies: %d | Score: %d", 
 			state.Round, len(state.MyUnits), len(state.Enemies), state.RawScore)
+
+		if time.Since(lastBoosterCheck) > 5*time.Second {
+			lastBoosterCheck = time.Now()
+			boosters, err := api.GetAvailableBoosters()
+			if err != nil {
+				log.Printf("Error getting boosters: %v", err)
+			} else {
+				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
+					if err := api.ActivateBooster(boosterID); err != nil {
+						log.Printf("Error activating booster: %v", err)
+					} else {
+						log.Printf("Activated booster id=%d", boosterID)
+					}
+				}
+			}
+		}
 
 		playerCmd := bot.CalculateTurn(state)
 
