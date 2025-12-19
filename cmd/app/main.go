@@ -6,7 +6,7 @@ import (
 	"gorutin/internal/domain"
 	"gorutin/internal/logic"
 
-	// "gorutin/internal/ui"
+	"gorutin/internal/ui"
 	"log"
 	"os"
 	"strings"
@@ -93,6 +93,9 @@ func main() {
 					if err := api.ActivateBooster(boosterID); err != nil {
 						log.Printf("Error activating booster: %v", err)
 					} else {
+						if boosterID >= 0 && boosterID < len(boosters.Available) {
+							ui.RecordBoosterPurchase(boosters.Available[boosterID].Type)
+						}
 						log.Printf("Activated booster id=%d", boosterID)
 					}
 				}

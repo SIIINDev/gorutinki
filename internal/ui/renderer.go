@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 	"gorutin/internal/domain"
-	//"strings"
+	"strings"
 )
 
 // Symbols - набор символов для отрисовки
@@ -17,6 +17,30 @@ const (
 	SymMob     = "M "
 	SymDanger  = "XX" // Зона взрыва (в режиме дебага)
 )
+
+type roundTracker struct {
+	round           string
+	prevEnemies     map[string]struct{}
+	prevMobs        map[string]struct{}
+	prevObstacles   map[domain.Vec2d]struct{}
+	prevUnitPos     map[string]domain.Vec2d
+	killsEnemies    int
+	killsMobs       int
+	blocksDestroyed int
+	distance        int
+	boosters        []string
+}
+
+var tracker roundTracker
+
+// RecordBoosterPurchase stores booster info for round summary output.
+func RecordBoosterPurchase(boosterType string) {
+	boosterType = strings.TrimSpace(boosterType)
+	if boosterType == "" {
+		return
+	}
+	tracker.boosters = append(tracker.boosters, boosterType)
+}
 
 func Draw(state *domain.GameState, debugGrid [][]int) {
 	// Очистка экрана
@@ -65,7 +89,15 @@ func Draw(state *domain.GameState, debugGrid [][]int) {
 	}
 
 	// 2. Выводим информацию
+	tracker.update(state)
 	fmt.Printf("Round: %s | Score: %d | Alive Units: %d\n", state.Round, state.RawScore, len(state.MyUnits))
+	fmt.Printf("Boosters: %s | Kills: E:%d M:%d | Blocks: %d | Distance: %d\n",
+		tracker.boosterLabel(),
+		tracker.killsEnemies,
+		tracker.killsMobs,
+		tracker.blocksDestroyed,
+		tracker.distance,
+	)
 	fmt.Println("------------------------------------------------")
 
 	// 3. Рисуем вид для каждого юнита
@@ -109,4 +141,94 @@ func set(grid [][]string, p domain.Vec2d, s string) {
 	if p.X() >= 0 && p.X() < len(grid) && p.Y() >= 0 && p.Y() < len(grid[0]) {
 		grid[p.X()][p.Y()] = s
 	}
+}
+
+func (t *roundTracker) boosterLabel() string {
+	if len(t.boosters) == 0 {
+		return "none"
+	}
+	return strings.Join(t.boosters, ",")
+}
+
+func (t *roundTracker) update(state *domain.GameState) {
+	if state.Round == "" || t.round != state.Round {
+		t.reset(state)
+		return
+	}
+
+	currentEnemies := make(map[string]struct{}, len(state.Enemies))
+	for _, e := range state.Enemies {
+		currentEnemies[e.ID] = struct{}{}
+	}
+	currentMobs := make(map[string]struct{}, len(state.Mobs))
+	for _, m := range state.Mobs {
+		currentMobs[m.ID] = struct{}{}
+	}
+	currentObstacles := make(map[domain.Vec2d]struct{}, len(state.Arena.Obstacles))
+	for _, o := range state.Arena.Obstacles {
+		currentObstacles[o] = struct{}{}
+	}
+	currentUnitPos := make(map[string]domain.Vec2d, len(state.MyUnits))
+	for _, u := range state.MyUnits {
+		currentUnitPos[u.ID] = u.Pos
+	}
+
+	for id := range t.prevEnemies {
+		if _, ok := currentEnemies[id]; !ok {
+			t.killsEnemies++
+		}
+	}
+	for id := range t.prevMobs {
+		if _, ok := currentMobs[id]; !ok {
+			t.killsMobs++
+		}
+	}
+	for pos := range t.prevObstacles {
+		if _, ok := currentObstacles[pos]; !ok {
+			t.blocksDestroyed++
+		}
+	}
+	for id, pos := range currentUnitPos {
+		if prev, ok := t.prevUnitPos[id]; ok {
+			t.distance += absIntUI(pos.X()-prev.X()) + absIntUI(pos.Y()-prev.Y())
+		}
+	}
+
+	t.prevEnemies = currentEnemies
+	t.prevMobs = currentMobs
+	t.prevObstacles = currentObstacles
+	t.prevUnitPos = currentUnitPos
+}
+
+func (t *roundTracker) reset(state *domain.GameState) {
+	t.round = state.Round
+	t.killsEnemies = 0
+	t.killsMobs = 0
+	t.blocksDestroyed = 0
+	t.distance = 0
+	t.boosters = nil
+
+	t.prevEnemies = make(map[string]struct{}, len(state.Enemies))
+	for _, e := range state.Enemies {
+		t.prevEnemies[e.ID] = struct{}{}
+	}
+	t.prevMobs = make(map[string]struct{}, len(state.Mobs))
+	for _, m := range state.Mobs {
+		t.prevMobs[m.ID] = struct{}{}
+	}
+	t.prevObstacles = make(map[domain.Vec2d]struct{}, len(state.Arena.Obstacles))
+	for _, o := range state.Arena.Obstacles {
+		t.prevObstacles[o] = struct{}{}
+	}
+	t.prevUnitPos = make(map[string]domain.Vec2d, len(state.MyUnits))
+	for _, u := range state.MyUnits {
+		t.prevUnitPos[u.ID] = u.Pos
+	}
+}
+
+func absIntUI(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

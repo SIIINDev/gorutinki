@@ -9,6 +9,8 @@ type Bot struct {
 	Grid      [][]int // -1: wall/bomb, 0: empty, 1: danger
 	BombRange int
 	Speed     int
+	roundID   string
+	roundTick int
 }
 
 const (
@@ -17,6 +19,8 @@ const (
 	CellDanger = 2  // Опасно (зона взрыва)
 	MaxPathLen = 30
 )
+
+const StartAggroTicks = 10
 
 func NewBot() *Bot {
 	return &Bot{BombRange: 1, Speed: 2}
@@ -33,6 +37,12 @@ func (b *Bot) UpdateBoosterState(state domain.BoosterState) {
 
 func (b *Bot) CalculateTurn(state *domain.GameState) *domain.PlayerCommand {
 	b.State = state
+	if b.roundID != state.Round {
+		b.roundID = state.Round
+		b.roundTick = 0
+	} else {
+		b.roundTick++
+	}
 	b.buildGrid()
 
 	var unitCmds []domain.UnitCommand
@@ -145,7 +155,42 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 	// 2. Пытаемся добраться до клетки рядом с препятствием.
 	// Если есть бомбы - ставим и сразу отходим.
 	wantBomb := u.BombCount > 0
-	path, bombPos := b.findAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
+	var path []domain.Vec2d
+	var bombPos *domain.Vec2d
+	if b.isStartAggro() {
+		path, bombPos = b.findEnemyAttackPlan(myPos, wantBomb, b.BombRange, u.ID, false)
+		if len(path) <= 1 {
+			path, bombPos = b.findEnemyAttackPlan(myPos, wantBomb, b.BombRange, u.ID, true)
+		}
+		if len(path) > 1 {
+			if len(path)-1 > MaxPathLen {
+				return nil
+			}
+			cmd := domain.UnitCommand{
+				ID:   u.ID,
+				Path: path[1:],
+			}
+			if bombPos != nil {
+				cmd.Bombs = []domain.Vec2d{*bombPos}
+			}
+			return &cmd
+		}
+	}
+	path, bombPos = b.findMobAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
+	if len(path) > 1 {
+		if len(path)-1 > MaxPathLen {
+			return nil
+		}
+		cmd := domain.UnitCommand{
+			ID:   u.ID,
+			Path: path[1:],
+		}
+		if bombPos != nil {
+			cmd.Bombs = []domain.Vec2d{*bombPos}
+		}
+		return &cmd
+	}
+	path, bombPos = b.findAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
 	if len(path) > 1 {
 		if len(path)-1 > MaxPathLen {
 			return nil
@@ -215,6 +260,10 @@ func (b *Bot) bfs(start domain.Vec2d, isTarget func(domain.Vec2d) bool) []domain
 	return nil
 }
 
+func (b *Bot) isStartAggro() bool {
+	return b.roundTick < StartAggroTicks
+}
+
 func (b *Bot) isValid(p domain.Vec2d) bool {
 	return p.X() >= 0 && p.Y() >= 0 && p.X() < b.State.MapSize.X() && p.Y() < b.State.MapSize.Y()
 }
@@ -282,6 +331,120 @@ func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, s
 	}
 
 	return nil, nil
+}
+
+func (b *Bot) findEnemyAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, selfID string, allowInvulnerable bool) ([]domain.Vec2d, *domain.Vec2d) {
+	queue := []domain.Vec2d{start}
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	visited[start] = domain.Vec2d{-1, -1}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if b.canHitEnemyFrom(current, bombRange, allowInvulnerable) {
+			path := b.reconstructPath(current, visited)
+			if !wantBomb {
+				if len(path)-1 <= MaxPathLen {
+					return path, nil
+				}
+			} else {
+				if b.hasFriendlyInBlast(current, bombRange, selfID) {
+					goto expand
+				}
+				escapePath := b.findEscapePath(current, bombRange)
+				if len(escapePath) > 1 {
+					path = append(path, escapePath[1:]...)
+					if len(path)-1 <= MaxPathLen {
+						bombPos := current
+						return path, &bombPos
+					}
+				}
+			}
+		}
+
+	expand:
+		for _, next := range b.neighbors(current) {
+			if !b.isWalkable(next) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func (b *Bot) canHitEnemyFrom(pos domain.Vec2d, bombRange int, allowInvulnerable bool) bool {
+	for _, e := range b.State.Enemies {
+		if !allowInvulnerable && e.SafeTime > 0 {
+			continue
+		}
+		if b.isInBombLine(e.Pos, pos, bombRange) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) findMobAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, selfID string) ([]domain.Vec2d, *domain.Vec2d) {
+	queue := []domain.Vec2d{start}
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	visited[start] = domain.Vec2d{-1, -1}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if b.canHitMobFrom(current, bombRange) {
+			path := b.reconstructPath(current, visited)
+			if !wantBomb {
+				if len(path)-1 <= MaxPathLen {
+					return path, nil
+				}
+			} else {
+				if b.hasFriendlyInBlast(current, bombRange, selfID) {
+					goto expand
+				}
+				escapePath := b.findEscapePath(current, bombRange)
+				if len(escapePath) > 1 {
+					path = append(path, escapePath[1:]...)
+					if len(path)-1 <= MaxPathLen {
+						bombPos := current
+						return path, &bombPos
+					}
+				}
+			}
+		}
+
+	expand:
+		for _, next := range b.neighbors(current) {
+			if !b.isWalkable(next) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func (b *Bot) canHitMobFrom(pos domain.Vec2d, bombRange int) bool {
+	for _, m := range b.State.Mobs {
+		if m.SafeTime > 0 {
+			continue
+		}
+		if b.isInBombLine(m.Pos, pos, bombRange) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) hasAdjacentObstacle(p domain.Vec2d) bool {
