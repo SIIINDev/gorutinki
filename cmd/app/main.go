@@ -46,6 +46,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error getting boosters: %v", err)
 			} else {
+				bot.UpdateBoosterState(boosters.State)
 				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
 					if err := api.ActivateBooster(boosterID); err != nil {
 						log.Printf("Error activating booster: %v", err)

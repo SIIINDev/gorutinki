@@ -5,8 +5,10 @@ import (
 )
 
 type Bot struct {
-	State *domain.GameState
-	Grid  [][]int // -1: wall/bomb, 0: empty, 1: danger
+	State     *domain.GameState
+	Grid      [][]int // -1: wall/bomb, 0: empty, 1: danger
+	BombRange int
+	Speed     int
 }
 
 const (
@@ -17,7 +19,16 @@ const (
 )
 
 func NewBot() *Bot {
-	return &Bot{}
+	return &Bot{BombRange: 1, Speed: 2}
+}
+
+func (b *Bot) UpdateBoosterState(state domain.BoosterState) {
+	if state.BombRange > 0 {
+		b.BombRange = state.BombRange
+	}
+	if state.Speed > 0 {
+		b.Speed = state.Speed
+	}
 }
 
 func (b *Bot) CalculateTurn(state *domain.GameState) *domain.PlayerCommand {
@@ -134,7 +145,7 @@ func (b *Bot) processUnit(u domain.Unit) *domain.UnitCommand {
 	// 2. Пытаемся добраться до клетки рядом с препятствием.
 	// Если есть бомбы - ставим и сразу отходим.
 	wantBomb := u.BombCount > 0
-	path, bombPos := b.findAttackPlan(myPos, wantBomb)
+	path, bombPos := b.findAttackPlan(myPos, wantBomb, b.BombRange, u.ID)
 	if len(path) > 1 {
 		if len(path)-1 > MaxPathLen {
 			return nil
@@ -220,7 +231,7 @@ func (b *Bot) isWalkable(p domain.Vec2d) bool {
 	return b.Grid[p.X()][p.Y()] == CellEmpty
 }
 
-func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool) ([]domain.Vec2d, *domain.Vec2d) {
+func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool, bombRange int, selfID string) ([]domain.Vec2d, *domain.Vec2d) {
 	queue := []domain.Vec2d{start}
 	visited := make(map[domain.Vec2d]domain.Vec2d)
 	visited[start] = domain.Vec2d{-1, -1}
@@ -240,9 +251,12 @@ func (b *Bot) findAttackPlan(start domain.Vec2d, wantBomb bool) ([]domain.Vec2d,
 					return path, nil
 				}
 			} else {
-				escape, ok := b.findEscapeNeighbor(current)
-				if ok {
-					path = append(path, escape)
+				if b.hasFriendlyInBlast(current, bombRange, selfID) {
+					goto expand
+				}
+				escapePath := b.findEscapePath(current, bombRange)
+				if len(escapePath) > 1 {
+					path = append(path, escapePath[1:]...)
 					if len(path)-1 <= MaxPathLen {
 						bombPos := current
 						return path, &bombPos
@@ -275,15 +289,6 @@ func (b *Bot) hasAdjacentObstacle(p domain.Vec2d) bool {
 	return false
 }
 
-func (b *Bot) findEscapeNeighbor(p domain.Vec2d) (domain.Vec2d, bool) {
-	for _, n := range b.neighbors(p) {
-		if b.isWalkable(n) {
-			return n, true
-		}
-	}
-	return domain.Vec2d{}, false
-}
-
 func (b *Bot) neighbors(p domain.Vec2d) []domain.Vec2d {
 	return []domain.Vec2d{
 		{p.X() + 1, p.Y()},
@@ -301,4 +306,153 @@ func (b *Bot) reconstructPath(target domain.Vec2d, visited map[domain.Vec2d]doma
 		curr = visited[curr]
 	}
 	return path
+}
+
+func (b *Bot) findEscapePath(start domain.Vec2d, bombRange int) []domain.Vec2d {
+	queue := []domain.Vec2d{start}
+	steps := make(map[domain.Vec2d]int)
+	visited := make(map[domain.Vec2d]domain.Vec2d)
+	visited[start] = domain.Vec2d{-1, -1}
+	steps[start] = 0
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		currentSteps := steps[current]
+		arrivalSec := b.stepsToSeconds(currentSteps)
+		if !b.isInBombLine(current, start, bombRange) && !b.isUnsafeDueToBombs(current, arrivalSec, start) {
+			return b.reconstructPath(current, visited)
+		}
+
+		for _, next := range b.neighbors(current) {
+			nextSteps := currentSteps + 1
+			arrivalSec = b.stepsToSeconds(nextSteps)
+			if !b.isWalkableTimed(next, arrivalSec, start) {
+				continue
+			}
+			if _, seen := visited[next]; !seen {
+				visited[next] = current
+				steps[next] = nextSteps
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (b *Bot) hasFriendlyInBlast(bombPos domain.Vec2d, bombRange int, selfID string) bool {
+	for _, u := range b.State.MyUnits {
+		if !u.Alive || u.ID == selfID {
+			continue
+		}
+		if b.isInBombLine(u.Pos, bombPos, bombRange) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) isInBombLine(pos domain.Vec2d, bombPos domain.Vec2d, bombRange int) bool {
+	if pos == bombPos {
+		return true
+	}
+	if pos.X() == bombPos.X() {
+		if absIntBot(pos.Y()-bombPos.Y()) > bombRange {
+			return false
+		}
+		return b.isLineClear(bombPos, pos)
+	}
+	if pos.Y() == bombPos.Y() {
+		if absIntBot(pos.X()-bombPos.X()) > bombRange {
+			return false
+		}
+		return b.isLineClear(bombPos, pos)
+	}
+	return false
+}
+
+func (b *Bot) isLineClear(a domain.Vec2d, c domain.Vec2d) bool {
+	if a.X() == c.X() {
+		step := 1
+		if c.Y() < a.Y() {
+			step = -1
+		}
+		for y := a.Y() + step; y != c.Y(); y += step {
+			if b.isBlocked(domain.Vec2d{a.X(), y}) {
+				return false
+			}
+		}
+		return true
+	}
+	if a.Y() == c.Y() {
+		step := 1
+		if c.X() < a.X() {
+			step = -1
+		}
+		for x := a.X() + step; x != c.X(); x += step {
+			if b.isBlocked(domain.Vec2d{x, a.Y()}) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (b *Bot) isBlocked(p domain.Vec2d) bool {
+	for _, w := range b.State.Arena.Walls {
+		if w == p {
+			return true
+		}
+	}
+	for _, o := range b.State.Arena.Obstacles {
+		if o == p {
+			return true
+		}
+	}
+	for _, bm := range b.State.Arena.Bombs {
+		if bm.Pos == p {
+			return true
+		}
+	}
+	return false
+}
+
+func absIntBot(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func (b *Bot) stepsToSeconds(steps int) float64 {
+	speed := b.Speed
+	if speed <= 0 {
+		speed = 2
+	}
+	return float64(steps) / float64(speed)
+}
+
+func (b *Bot) isWalkableTimed(p domain.Vec2d, arrivalSec float64, ownBombPos domain.Vec2d) bool {
+	if !b.isValid(p) {
+		return false
+	}
+	if b.Grid[p.X()][p.Y()] == CellWall {
+		return false
+	}
+	return !b.isUnsafeDueToBombs(p, arrivalSec, ownBombPos)
+}
+
+func (b *Bot) isUnsafeDueToBombs(p domain.Vec2d, arrivalSec float64, ownBombPos domain.Vec2d) bool {
+	for _, bm := range b.State.Arena.Bombs {
+		if bm.Pos == ownBombPos {
+			continue
+		}
+		if b.isInBombLine(p, bm.Pos, bm.Radius) && bm.Timer > arrivalSec {
+			return true
+		}
+	}
+	return false
 }
