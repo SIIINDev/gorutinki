@@ -1,7 +1,5 @@
 package domain
 
-import "encoding/json"
-
 // Vec2d - координаты [x, y]
 type Vec2d [2]int
 
@@ -53,6 +51,31 @@ type Bomb struct {
 	Radius int     `json:"range"`
 }
 
+// AvailableBoosterResponse - response for /api/booster
+type AvailableBoosterResponse struct {
+	Available []AvailableBooster `json:"available"`
+	State     BoosterState       `json:"state"`
+}
+
+type AvailableBooster struct {
+	Cost int    `json:"cost"`
+	Type string `json:"type"`
+}
+
+type BoosterState struct {
+	Armor            int  `json:"armor"`
+	BombDelay        int  `json:"bomb_delay"`
+	BombRange        int  `json:"bomb_range"`
+	Bombers          int  `json:"bombers"`
+	Bombs            int  `json:"bombs"`
+	CanPassBombs     bool `json:"can_pass_bombs"`
+	CanPassObstacles bool `json:"can_pass_obstacles"`
+	CanPassWalls     bool `json:"can_pass_walls"`
+	Points           int  `json:"points"`
+	Speed            int  `json:"speed"`
+	View             int  `json:"view"`
+}
+
 // PlayerCommand - структура запроса в /api/move
 type PlayerCommand struct {
 	Bombers []UnitCommand `json:"bombers"`
@@ -62,4 +85,9 @@ type UnitCommand struct {
 	ID    string  `json:"id"`
 	Path  []Vec2d `json:"path,omitempty"`
 	Bombs []Vec2d `json:"bombs,omitempty"`
+}
+
+// BoosterCommand - request body for /api/booster
+type BoosterCommand struct {
+	Booster int `json:"booster"`
 }

@@ -23,6 +23,7 @@ func main() {
 
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
+	lastBoosterCheck := time.Time{}
 
 	for range ticker.C {
 		state, err := api.GetGameState()
@@ -37,6 +38,22 @@ func main() {
 		// Если раунда нет или он завершен, просто ждем
 		if state.Round == "" {
 			continue
+		}
+
+		if time.Since(lastBoosterCheck) > 5*time.Second {
+			lastBoosterCheck = time.Now()
+			boosters, err := api.GetAvailableBoosters()
+			if err != nil {
+				log.Printf("Error getting boosters: %v", err)
+			} else {
+				if boosterID, ok := logic.ChooseBooster(boosters.Available, boosters.State, state); ok {
+					if err := api.ActivateBooster(boosterID); err != nil {
+						log.Printf("Error activating booster: %v", err)
+					} else {
+						log.Printf("Activated booster id=%d", boosterID)
+					}
+				}
+			}
 		}
 
 		playerCmd := bot.CalculateTurn(state)
