@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gorutin/internal/domain"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -18,11 +19,25 @@ type DatsClient struct {
 func NewClient(url, token string) *DatsClient {
 	return &DatsClient{
 		BaseURL: url,
-		Token:   token,
+		Token:   strings.TrimSpace(token), // Убираем пробелы/переносы
 		Client: &http.Client{
 			Timeout: 2 * time.Second,
 		},
 	}
+}
+
+func (c *DatsClient) checkError(resp *http.Response) error {
+	if resp.StatusCode == 200 {
+		return nil
+	}
+
+	var apiErr domain.ServerError
+	if err := json.NewDecoder(resp.Body).Decode(&apiErr); err == nil {
+		return &apiErr // Возвращаем типизированную ошибку
+	}
+
+	// Если не удалось распарсить JSON ошибки
+	return fmt.Errorf("http status %s", resp.Status)
 }
 
 func (c *DatsClient) GetGameState() (*domain.GameState, error) {
@@ -38,8 +53,8 @@ func (c *DatsClient) GetGameState() (*domain.GameState, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	if err := c.checkError(resp); err != nil {
+		return nil, err
 	}
 
 	var state domain.GameState
@@ -69,11 +84,30 @@ func (c *DatsClient) SendCommands(cmd domain.PlayerCommand) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		// Читаем ошибку, если есть
-		// var apiErr ...
-		return fmt.Errorf("bad status: %s", resp.Status)
+	return c.checkError(resp)
+}
+
+func (c *DatsClient) GetRounds() (*domain.RoundListResponse, error) {
+	req, err := http.NewRequest("GET", c.BaseURL+"/api/rounds", nil)
+	if err != nil {
+		return nil, err
 	}
-	
-	return nil
+	req.Header.Set("X-Auth-Token", c.Token)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if err := c.checkError(resp); err != nil {
+		return nil, err
+	}
+
+	var rounds domain.RoundListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rounds); err != nil {
+		return nil, err
+	}
+
+	return &rounds, nil
 }

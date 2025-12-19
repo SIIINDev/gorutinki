@@ -2,7 +2,7 @@ package logic
 
 import (
 	"gorutin/internal/domain"
-	"math"
+	//"math"
 )
 
 type Bot struct {
