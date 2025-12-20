@@ -147,12 +147,18 @@ func (b *Bot) decideUnitAction(u domain.Unit, suicideMode bool) *domain.UnitComm
 	b.scanArea(u.Pos)
 
 	// 2. ЦЕЛЬ
+	// Если мы уже на цели, но нет бомб - просто стоим и ждем (согласно запросу)
+	// При этом Survival (шаг 0) все еще работает и уведет нас, если станет опасно
+	target := b.UnitTargets[u.ID]
+	if target != nil && u.Pos == *target && u.BombCount == 0 {
+		return &domain.UnitCommand{ID: u.ID}
+	}
+
 	// Всегда ищем наилучшую цель с учетом текущего положения
 	// Это позволяет переключаться на более выгодные позиции (например, 3 ящика вместо 1)
 	best := b.pickBestFromMemory(u.Pos, u.ID)
 	
 	// Если нашли что-то лучшее (или текущей цели нет)
-	target := b.UnitTargets[u.ID]
 	if best != nil {
 		if target == nil || *target != *best {
 			b.releaseTarget(u.ID)
@@ -190,7 +196,8 @@ func (b *Bot) decideUnitAction(u domain.Unit, suicideMode bool) *domain.UnitComm
 					delete(b.MemoryTargets, *target)
 				}
 			} else {
-				b.releaseTarget(u.ID)
+				// У нас нет бомб, но мы на цели. Стоим и ждем.
+				return &domain.UnitCommand{ID: u.ID}
 			}
 			return nil
 		}
@@ -310,14 +317,24 @@ func (b *Bot) cleanMemory() {
 
 func (b *Bot) pickBestFromMemory(myPos domain.Vec2d, myID string) *domain.Vec2d {
 	var bestTarget *domain.Vec2d
-	bestScore := -1.0
+	bestScore := -100000.0 // Start with a very low score
+	
+	currentTarget := b.UnitTargets[myID]
+
 	for pos, memScore := range b.MemoryTargets {
 		if assignedID, exists := b.AssignedTargets[pos]; exists && assignedID != myID { continue }
 		
 		dist := b.manhattan(myPos, pos)
-		if dist == 0 { dist = 1 }
+		// Removed the check that set dist=1 if dist=0. 
+		// We want to prefer the tile we are standing on (dist=0).
 		
 		finalScore := float64(memScore*10) - float64(dist)
+
+		// Hysteresis: slightly prefer the current target to avoid jitter when scores are close/equal
+		if currentTarget != nil && *currentTarget == pos {
+			finalScore += 0.5
+		}
+
 		if finalScore > bestScore {
 			bestScore = finalScore
 			cpy := pos
