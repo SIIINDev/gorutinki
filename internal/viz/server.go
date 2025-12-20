@@ -16,10 +16,13 @@ type Server struct {
 	state    *domain.GameState
 	grid     [][]int
 	boosters *domain.BoosterState
+	logs     []string
 }
 
 func NewServer() *Server {
-	return &Server{}
+	return &Server{
+		logs: make([]string, 0),
+	}
 }
 
 func (s *Server) Start(addr string) {
@@ -36,6 +39,15 @@ func (s *Server) Update(state *domain.GameState, grid [][]int, boosters *domain.
 	s.boosters = boosters
 }
 
+func (s *Server) AddLog(msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logs = append(s.logs, msg)
+	if len(s.logs) > 50 {
+		s.logs = s.logs[len(s.logs)-50:]
+	}
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(indexHTML)
@@ -49,10 +61,12 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		State    *domain.GameState    `json:"state"`
 		Grid     [][]int              `json:"grid"`
 		Boosters *domain.BoosterState `json:"boosters"`
+		Logs     []string             `json:"logs"`
 	}{
 		State:    s.state,
 		Grid:     s.grid,
 		Boosters: s.boosters,
+		Logs:     s.logs,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

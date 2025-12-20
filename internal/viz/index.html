@@ -10,18 +10,43 @@
         #viz-container { flex: 1; position: relative; background: #333; overflow: hidden; }
         canvas { cursor: grab; display: block; }
         canvas:active { cursor: grabbing; }
-        #sidebar { width: 250px; background: #1a1a1a; border-left: 2px solid #444; padding: 15px; overflow-y: auto; }
+        #sidebar { width: 300px; background: #1a1a1a; border-left: 2px solid #444; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;}
         #stats { font-size: 16px; font-weight: bold; }
         .legend { display: flex; gap: 10px; font-size: 12px; flex-wrap: wrap; }
         .item { display: flex; align-items: center; gap: 4px; }
         .color-box { width: 12px; height: 12px; border: 1px solid #fff; }
         .controls { font-size: 11px; color: #888; margin-left: auto; text-align: right; }
         
-        .skill-group { margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        .skill-group h3 { margin: 0 0 10px 0; font-size: 14px; color: #00ff00; text-transform: uppercase; }
+        .skill-group { border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .skill-group h3 { margin: 0 0 10px 0; font-size: 14px; color: #00ff00; text-transform: uppercase; border-left: 3px solid #00ff00; padding-left: 8px;}
         .stat-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 13px; }
         .stat-val { color: #fff; font-weight: bold; }
         .stat-label { color: #aaa; }
+        .cost { font-size: 10px; color: #666; margin-left: 4px; }
+
+        /* Strategy List */
+        .strategy-list { list-style: none; padding: 0; margin: 0; font-size: 12px; color: #888; }
+        .strategy-item { padding: 4px 8px; border-radius: 4px; margin-bottom: 2px; display: flex; justify-content: space-between;}
+        .strategy-item.active { background: #333; color: #fff; border-left: 3px solid #ffff00; font-weight: bold; }
+        .strategy-item.done { text-decoration: line-through; color: #444; }
+        .strategy-item.future { opacity: 0.7; }
+        
+        .purchase-badge { background: #444; color: #fff; padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+        .active .purchase-badge { background: #ffff00; color: #000; }
+
+        #logs-container {
+            height: 150px;
+            overflow-y: auto;
+            background: #111;
+            padding: 5px;
+            font-size: 10px;
+            color: #ccc;
+            border: 1px solid #444;
+            font-family: 'Consolas', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #222; padding-bottom: 2px; }
     </style>
 </head>
 <body>
@@ -32,6 +57,8 @@
             <div class="item"><div class="color-box" style="background:#cd853f"></div> Box</div>
             <div class="item"><div class="color-box" style="background:#00ff00"></div> Me</div>
             <div class="item"><div class="color-box" style="background:#ff0000"></div> Enemy</div>
+            <div class="item"><div class="color-box" style="background:#800080"></div> Mob</div>
+            <div class="item"><div class="color-box" style="background:#ff00ff"></div> Target</div>
         </div>
         <div class="controls">
             Scroll to Zoom | Drag to Pan<br>Double Click to Reset
@@ -44,27 +71,36 @@
         </div>
         <div id="sidebar">
             <div class="skill-group">
+                <h3>Request Logs</h3>
+                <div id="logs-container">Waiting for logs...</div>
+            </div>
+
+            <div class="skill-group">
+                <h3>Strategy (Next Buy)</h3>
+                <ul class="strategy-list" id="strategy-list">
+                    <!-- JS will populate -->
+                </ul>
+            </div>
+
+            <div class="skill-group">
                 <h3>Economy</h3>
                 <div class="stat-row"><span class="stat-label">Points:</span> <span class="stat-val" id="val-points">0</span></div>
             </div>
             <div class="skill-group">
-                <h3>Movement</h3>
-                <div class="stat-row"><span class="stat-label">Speed:</span> <span class="stat-val" id="val-speed">0</span></div>
-                <div class="stat-row"><span class="stat-label">View:</span> <span class="stat-val" id="val-view">0</span></div>
+                <h3>Combat Stats</h3>
+                <div class="stat-row"><span class="stat-label">Bombs <span class="cost">(1pt)</span>:</span> <span class="stat-val" id="val-bombs">0</span></div>
+                <div class="stat-row"><span class="stat-label">Range <span class="cost">(1pt)</span>:</span> <span class="stat-val" id="val-range">0</span></div>
+                <div class="stat-row"><span class="stat-label">Delay <span class="cost">(1pt)</span>:</span> <span class="stat-val" id="val-delay">0ms</span></div>
             </div>
             <div class="skill-group">
-                <h3>Combat</h3>
-                <div class="stat-row"><span class="stat-label">Units:</span> <span class="stat-val" id="val-bombers">0</span></div>
-                <div class="stat-row"><span class="stat-label">Bombs:</span> <span class="stat-val" id="val-bombs">0</span></div>
-                <div class="stat-row"><span class="stat-label">Range:</span> <span class="stat-val" id="val-range">0</span></div>
-                <div class="stat-row"><span class="stat-label">Delay:</span> <span class="stat-val" id="val-delay">0ms</span></div>
+                <h3>Movement</h3>
+                <div class="stat-row"><span class="stat-label">Speed <span class="cost">(1pt)</span>:</span> <span class="stat-val" id="val-speed">0</span></div>
+                <div class="stat-row"><span class="stat-label">Units <span class="cost">(2pt)</span>:</span> <span class="stat-val" id="val-bombers">0</span></div>
             </div>
             <div class="skill-group">
                 <h3>Passive</h3>
-                <div class="stat-row"><span class="stat-label">Armor:</span> <span class="stat-val" id="val-armor">0</span></div>
-                <div class="stat-row"><span class="stat-label">Pass Walls:</span> <span class="stat-val" id="val-p-walls">No</span></div>
-                <div class="stat-row"><span class="stat-label">Pass Boxes:</span> <span class="stat-val" id="val-p-boxes">No</span></div>
-                <div class="stat-row"><span class="stat-label">Pass Bombs:</span> <span class="stat-val" id="val-p-bombs">No</span></div>
+                <div class="stat-row"><span class="stat-label">Armor <span class="cost">(1pt)</span>:</span> <span class="stat-val" id="val-armor">0</span></div>
+                <div class="stat-row"><span class="stat-label">Pass Walls <span class="cost">(2pt)</span>:</span> <span class="stat-val" id="val-p-walls">No</span></div>
             </div>
         </div>
     </div>
@@ -93,33 +129,20 @@
         setTimeout(resize, 100);
 
         // --- Interaction Handlers ---
-        // (Scroll, Drag, Reset logic stays the same)
-
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const zoomFactor = 1.1;
             const direction = e.deltaY < 0 ? 1 : -1;
-            
-            // Zoom towards mouse pointer
             const mouseX = e.offsetX;
             const mouseY = e.offsetY;
-
-            // Convert mouse screen pos to world pos (relative to pan)
             const worldX = (mouseX - panX) / zoom;
             const worldY = (mouseY - panY) / zoom;
-
-            // Apply zoom
             if (direction > 0) zoom *= zoomFactor;
             else zoom /= zoomFactor;
-
-            // Clamp zoom
             if (zoom < 0.1) zoom = 0.1;
             if (zoom > 20) zoom = 20;
-
-            // Adjust pan to keep mouse pointing at same world coord
             panX = mouseX - worldX * zoom;
             panY = mouseY - worldY * zoom;
-
             draw();
         });
 
@@ -142,49 +165,46 @@
         });
 
         window.addEventListener('mouseup', () => isDragging = false);
-
-        canvas.addEventListener('dblclick', () => {
-            // Reset view
-            zoom = 1.0;
-            centerMap();
-            draw();
-        });
+        canvas.addEventListener('dblclick', () => { zoom = 1.0; centerMap(); draw(); });
 
         function centerMap() {
             if (!lastData || !lastData.state) return;
             const s = lastData.state;
-            const mapW = s.map_size[0] * 50; // Assume base cell size 50
+            const mapW = s.map_size[0] * 50;
             const mapH = s.map_size[1] * 50;
-            
-            // Calculate scale to fit
             const scaleX = canvas.width / mapW;
             const scaleY = canvas.height / mapH;
             const fitScale = Math.min(scaleX, scaleY) * 0.9;
-            
             zoom = fitScale;
             panX = (canvas.width - mapW * zoom) / 2;
             panY = (canvas.height - mapH * zoom) / 2;
         }
 
-
-        // --- Networking & Rendering ---
-
         async function fetchState() {
             try {
                 const response = await fetch('/api/state');
                 const data = await response.json();
-                
                 const isFirstData = !lastData;
                 lastData = data;
-                
-                if (isFirstData && data.state) {
-                    centerMap();
-                }
-
+                if (isFirstData && data.state) centerMap();
                 updateSidebar(data.boosters);
+                updateLogs(data.logs);
                 draw();
-            } catch (e) {
-                console.error(e);
+            } catch (e) { console.error(e); }
+        }
+
+        function updateLogs(logs) {
+            if (!logs) return;
+            const container = document.getElementById('logs-container');
+            // Check if user is scrolling up (don't auto-scroll if they are looking at old logs)
+            const isScrolledToBottom = Math.abs(container.scrollHeight - container.clientHeight - container.scrollTop) < 5;
+            
+            // Reverse logs so newest is at bottom? Or just append?
+            // Logs come as array [oldest, ..., newest].
+            container.innerHTML = logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+            
+            if (isScrolledToBottom) {
+                container.scrollTop = container.scrollHeight;
             }
         }
 
@@ -192,21 +212,76 @@
             if (!b) return;
             document.getElementById('val-points').innerText = b.points;
             document.getElementById('val-speed').innerText = b.speed;
-            document.getElementById('val-view').innerText = b.view;
             document.getElementById('val-bombers').innerText = b.bombers;
-            document.getElementById('val-bombs').innerText = b.bombs;
+            document.getElementById('val-bombs').innerText = `${b.bombers}/${b.bombs}`; // Used/Max
             document.getElementById('val-range').innerText = b.bomb_range;
             document.getElementById('val-delay').innerText = b.bomb_delay + 'ms';
             document.getElementById('val-armor').innerText = b.armor;
             document.getElementById('val-p-walls').innerText = b.can_pass_walls ? 'Yes' : 'No';
-            document.getElementById('val-p-boxes').innerText = b.can_pass_obstacles ? 'Yes' : 'No';
-            document.getElementById('val-p-bombs').innerText = b.can_pass_bombs ? 'Yes' : 'No';
+
+            updateStrategy(b);
+        }
+
+        function updateStrategy(b) {
+            const list = document.getElementById('strategy-list');
+            list.innerHTML = '';
+
+            // Priority Logic (Must match bot.go)
+            // 1. Range < 3
+            // 2. Delay > 2000
+            // 3. Bombs < 3
+            // 4. Range < 5
+            // 5. Bombs < 5
+            // 6. Speed < 3
+
+            const goals = [
+                { name: "Range to 3",    check: () => b.bomb_range >= 3, cost: 1 },
+                { name: "Min Fuse (2s)", check: () => b.bomb_delay <= 2000, cost: 1 },
+                { name: "Bombs to 3",    check: () => b.max_bombs >= 3, cost: 1 }, // Note: check field name case if unsure, likely snake_case from JSON
+                { name: "Range to 5",    check: () => b.bomb_range >= 5, cost: 1 },
+                { name: "Bombs to 5",    check: () => b.max_bombs >= 5, cost: 1 },
+                { name: "Speed to 3",    check: () => b.speed >= 3, cost: 1 },
+                { name: "Max Range/Bombs", check: () => false, cost: 1 },
+            ];
+
+            // NOTE: json keys in 'b' come from Go struct tags.
+            // BoosterState tags: 
+            // Bombs -> "bombers" (Wait, MaxBombs is "bombs")
+            // Let's verify JSON keys.
+            // Go: MaxBombs int `json:"bombs"`
+            // Go: Bombers int `json:"bombers"`
+            // So b.bombs is MAX BOMBS. b.bombers is ALIVE UNITS.
+            // Correction: Previous code used b.bombs for max bombs. That is correct.
+            
+            let activeFound = false;
+            goals.forEach(g => {
+                const li = document.createElement('li');
+                li.className = 'strategy-item';
+                
+                const nameSpan = document.createElement('span');
+                nameSpan.innerText = g.name;
+                
+                const badge = document.createElement('span');
+                badge.className = 'purchase-badge';
+                badge.innerText = g.cost + 'pt';
+
+                li.appendChild(nameSpan);
+                li.appendChild(badge);
+
+                if (g.check()) {
+                    li.classList.add('done');
+                } else if (!activeFound) {
+                    li.classList.add('active');
+                    activeFound = true;
+                } else {
+                    li.classList.add('future');
+                }
+                list.appendChild(li);
+            });
         }
 
         function draw() {
             if (!lastData || !lastData.state) return;
-            
-            // Clear screen
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = "#333";
@@ -214,26 +289,21 @@
 
             const s = lastData.state;
             const grid = lastData.grid;
-            
             stats.innerText = `Round: ${s.round || '?'} | Score: ${s.raw_score}`;
 
-            // --- Apply Transformation ---
             ctx.translate(panX, panY);
             ctx.scale(zoom, zoom);
 
-            // Base cell size (internal coordinate system)
             const cellSize = 50; 
             const mapW = s.map_size[0];
             const mapH = s.map_size[1];
 
-            // Draw Map Background
             ctx.fillStyle = "#2a2a2a";
             ctx.fillRect(0, 0, mapW * cellSize, mapH * cellSize);
             ctx.strokeStyle = "#444";
             ctx.lineWidth = 1;
             ctx.strokeRect(0, 0, mapW * cellSize, mapH * cellSize);
 
-            // Helpers
             const drawCell = (x, y, color) => {
                 ctx.fillStyle = color;
                 ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
@@ -246,17 +316,14 @@
                 ctx.fill();
             };
 
-            // 1. Static objects
             if (s.arena) {
-                s.arena.walls.forEach(p => drawCell(p[0], p[1], '#888')); // Wall
-                s.arena.obstacles.forEach(p => drawCell(p[0], p[1], '#cd853f')); // Box
-                
+                s.arena.walls.forEach(p => drawCell(p[0], p[1], '#888'));
+                s.arena.obstacles.forEach(p => drawCell(p[0], p[1], '#cd853f'));
                 s.arena.bombs.forEach(b => {
                     ctx.fillStyle = 'black';
                     ctx.beginPath();
                     ctx.arc(b.pos[0] * cellSize + cellSize/2, b.pos[1] * cellSize + cellSize/2, cellSize/3, 0, Math.PI * 2);
                     ctx.fill();
-                    
                     ctx.fillStyle = 'white';
                     ctx.font = `bold ${cellSize/2}px Arial`;
                     ctx.textAlign = 'center';
@@ -265,11 +332,11 @@
                 });
             }
 
-            // 2. Danger Grid
             if (grid) {
                 for (let x = 0; x < mapW; x++) {
                     for (let y = 0; y < mapH; y++) {
-                        if (grid[x][y] === 2) { 
+                        // TileDanger = 4 in new logic
+                        if (grid[x][y] === 4) { 
                             ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
                             ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
                         }
@@ -277,9 +344,7 @@
                 }
             }
 
-            // 3. Units (Grouped by Position)
-            const occupants = {}; // Key: "x,y", Value: Array of {type, data}
-
+            const occupants = {};
             const addOccupant = (x, y, type, data) => {
                 const key = `${x},${y}`;
                 if (!occupants[key]) occupants[key] = [];
@@ -288,21 +353,13 @@
 
             if (s.enemies) s.enemies.forEach(u => addOccupant(u.pos[0], u.pos[1], 'enemy', u));
             if (s.mobs) s.mobs.forEach(m => addOccupant(m.pos[0], m.pos[1], 'mob', m));
-            if (s.bombers) s.bombers.forEach(u => {
-                if (u.alive) addOccupant(u.pos[0], u.pos[1], 'me', u);
-            });
+            if (s.bombers) s.bombers.forEach(u => { if (u.alive) addOccupant(u.pos[0], u.pos[1], 'me', u); });
 
-            // Draw grouped units
             for (const [key, list] of Object.entries(occupants)) {
                 const [x, y] = key.split(',').map(Number);
                 const count = list.length;
+                let primary = list.find(o => o.type === 'me') || list.find(o => o.type === 'enemy') || list[0];
 
-                // Priority: Me > Enemy > Mob (to decide which color to show as base)
-                let primary = list.find(o => o.type === 'me') 
-                           || list.find(o => o.type === 'enemy') 
-                           || list[0];
-
-                // Draw Primary Unit
                 if (primary.type === 'me') {
                     const u = primary.data;
                     ctx.fillStyle = '#00ff00';
@@ -310,14 +367,12 @@
                     ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, cellSize/2.2, 0, Math.PI * 2);
                     ctx.fill();
                     
-                    // Vision ring
                     ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
                     ctx.lineWidth = 2;
                     ctx.beginPath();
                     ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, 5 * cellSize, 0, Math.PI * 2);
                     ctx.stroke();
 
-                    // ID
                     ctx.fillStyle = 'black';
                     ctx.font = `bold ${cellSize/3}px monospace`;
                     ctx.textAlign = 'center';
@@ -326,16 +381,14 @@
 
                 } else if (primary.type === 'enemy') {
                     drawCircle(x, y, 'red');
-                } else {
-                    drawCircle(x, y, 'purple');
+                } else if (primary.type === 'mob') {
+                    drawCircle(x, y, '#800080'); // Purple for mobs
                 }
 
-                // Draw Count Badge if > 1
                 if (count > 1) {
                     const badgeSize = cellSize / 2.5;
                     const bx = x * cellSize + cellSize - badgeSize/1.5;
                     const by = y * cellSize + badgeSize/1.5;
-
                     ctx.fillStyle = 'white';
                     ctx.beginPath();
                     ctx.arc(bx, by, badgeSize/1.8, 0, Math.PI * 2);
@@ -343,7 +396,6 @@
                     ctx.strokeStyle = 'black';
                     ctx.lineWidth = 1;
                     ctx.stroke();
-
                     ctx.fillStyle = 'black';
                     ctx.font = `bold ${badgeSize}px Arial`;
                     ctx.textAlign = 'center';
@@ -352,7 +404,6 @@
                 }
             }
         }
-
         setInterval(fetchState, 100);
     </script>
 </body>

@@ -53,11 +53,14 @@ type Bomb struct {
 
 // AvailableBoosterResponse - response for /api/booster
 type AvailableBoosterResponse struct {
-	Available []AvailableBooster `json:"available"`
-	State     BoosterState       `json:"state"`
+	Available []Booster    `json:"available"`
+	State     BoosterState `json:"state"`
 }
 
-type AvailableBooster struct {
+type Booster struct {
+	// ID мы будем вычислять сами или надеяться что он есть в JSON скрыто. 
+	// Пока добавим его для совместимости с logic.
+	ID   int    `json:"id"` 
 	Cost int    `json:"cost"`
 	Type string `json:"type"`
 }
